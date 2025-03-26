@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>PLEX Market Price (Jita)</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 2rem;
+      background: #121212;
+      color: #f0f0f0;
+    }
+    .card {
+      background: #1e1e1e;
+      padding: 1.5rem;
+      border-radius: 12px;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+      max-width: 400px;
+      margin: auto;
+    }
+    h1 { text-align: center; }
+    .price-block {
+      margin-top: 1rem;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="card">
+    <h1>
+      <img src="https://images.evetech.net/types/44992/icon" alt="PLEX Icon"
+           style="height: 2em; vertical-align: middle; margin-right: 0.1em;">
+      PLEX Market (Jita)
+    </h1>
+    <div id="loading">Loading...</div>
+    <div id="data" style="display:none;">
+      <div class="price-block">
+        <strong>Lowest Sell Price:</strong> <span id="sell-price"></span> ISK  
+        (<span id="sell-qty"></span> units)
+      </div>
+      <div class="price-block">
+        <strong>Highest Buy Price:</strong> <span id="buy-price"></span> ISK  
+        (<span id="buy-qty"></span> units)
+      </div>
+    </div>
+  </div>
+
+  <script>
+    async function fetchPLEX() {
+      try {
+        const res = await fetch('/api/plex-price');
+        const data = await res.json();
+
+        document.getElementById('sell-price').textContent = Number(data.lowest_sell.price).toLocaleString();
+        document.getElementById('sell-qty').textContent = data.lowest_sell.volume;
+
+        document.getElementById('buy-price').textContent = Number(data.highest_buy.price).toLocaleString();
+        document.getElementById('buy-qty').textContent = data.highest_buy.volume;
+
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('data').style.display = 'block';
+      } catch (error) {
+        document.getElementById('loading').textContent = 'Failed to load data.';
+        console.error(error);
+      }
+    }
+
+    fetchPLEX();
+  </script>
+
+</body>
+</html>
