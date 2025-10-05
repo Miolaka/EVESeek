@@ -1,2 +1,2 @@
 # EVESeek
-AI model for EVE online with Deepseek
+AI model for EVE online ~~with Deepseek~~
