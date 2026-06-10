@@ -244,9 +244,18 @@ async function calculate() {
 function renderBuild(data, compareData) {
   const bd = data.cost_breakdown;
   const co = compareData?.compressed_ore;
-  // Use net leftover (after haul cost) for all cost calculations
+  const constraintMet = co?.leftover_constraint_met !== false;
   const leftoverNet = co?.leftover_net_isk || 0;
-  const useOre = leftoverNet > 0;
+  // Fall back to direct buy when the leftover limit cannot be satisfied
+  const useOre = constraintMet && leftoverNet > 0;
+
+  const noteEl = document.getElementById('total-note');
+  if (!constraintMet) {
+    noteEl.textContent = 'Leftover limit impossible with compressed ore — direct buy price used.';
+    noteEl.style.display = 'block';
+  } else {
+    noteEl.style.display = 'none';
+  }
 
   const netTotal = useOre
     ? (co.total_isk + co.refining_fee
@@ -433,22 +442,15 @@ function renderCompare(data) {
 
 function renderLeftovers(co) {
   const leftovers = co.leftover_items || [];
-  if (!leftovers.length) {
+  const constraintMet = co.leftover_constraint_met !== false;
+
+  // When constraint not met we already show direct buy price — hide leftover section
+  if (!constraintMet || !leftovers.length) {
     document.getElementById('leftover-section').style.display = 'none';
     return;
   }
 
   const hasLogistics = (co.leftover_logistics_isk || 0) > 0;
-  const constraintMet = co.leftover_constraint_met !== false;
-
-  // Constraint warning
-  const warning = document.getElementById('leftover-warning');
-  if (!constraintMet) {
-    warning.textContent = `⚠ Max leftover limit could not be fully satisfied — best available selection shown (net leftover: ${fmtISK(co.leftover_net_isk)})`;
-    warning.style.display = 'block';
-  } else {
-    warning.style.display = 'none';
-  }
 
   // Table header
   const thead = document.getElementById('leftover-thead');
