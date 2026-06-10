@@ -407,6 +407,8 @@ Same fields as `BuildCostRequest` plus:
 - `reprocessing_yield: float = 0.876`
 - `reprocessing_rate: Decimal = 0.02`
 - `refinery_bonus: float = 0.0` — separate from `structure_bonus` (EC vs refinery)
+- `leftover_logistics_isk_per_m3: Decimal = 0` — ISK/m³ cost to haul surplus minerals to Jita
+- `max_leftover_isk: Decimal | None = None` — upper bound on net leftover value; `None` = no limit
 
 ### 10.2 Response
 
@@ -423,6 +425,9 @@ Same fields as `BuildCostRequest` plus:
     "refined_total_m3": ...,
     "refining_fee": ...,
     "leftover_total_isk": ...,
+    "leftover_logistics_isk": ...,
+    "leftover_net_isk": ...,
+    "leftover_constraint_met": true,
     "ore_items": [
       {"ore_type_id", "ore_name", "for_mineral_type_id", "for_mineral_name",
        "quantity", "unit_price", "total_isk", "refining_fee",
@@ -430,7 +435,8 @@ Same fields as `BuildCostRequest` plus:
     ],
     "direct_items": [...],
     "leftover_items": [
-      {"type_id", "name", "quantity", "buy_price", "total_isk"}
+      {"type_id", "name", "quantity", "buy_price", "total_isk",
+       "volume_m3", "logistics_isk", "net_isk"}
     ]
   }
 }
@@ -438,23 +444,29 @@ Same fields as `BuildCostRequest` plus:
 
 **Field semantics**:
 - `total_isk`: raw ore purchase price (what you put up front)
-- `effective_isk`: `total_isk + refining_fee − byproduct_credit` (apples-to-apples vs direct buy)
+- `effective_isk`: sum of per-ore `(total_isk + refining_fee − byproduct_credit)` — used
+  for ore selection only; byproduct credits are logistics-adjusted (see 10.3 step 6)
 - `total_m3`: compressed ore haul volume (what you move to the refinery)
 - `refined_total_m3`: total mineral volume after refining (what leaves the refinery)
-- `leftover_total_isk`: Jita buy value of surplus minerals (sell back to recoup cost)
-- `leftover_items`: per-mineral surplus that exceeds what the build consumes
+- `leftover_total_isk`: gross Jita buy value of all surplus minerals
+- `leftover_logistics_isk`: total cost to haul surplus minerals to Jita
+- `leftover_net_isk`: `leftover_total_isk − leftover_logistics_isk` — actual cash received
+- `leftover_constraint_met`: `false` when `max_leftover_isk` was set but could not be satisfied
+- `LeftoverItem.volume_m3`: total m³ of this surplus item
+- `LeftoverItem.logistics_isk`: haul cost for this item = `volume_m3 × rate`
+- `LeftoverItem.net_isk`: `total_isk − logistics_isk` for this item (≥ 0)
 
 `direct_items` in `compressed_ore`: items with no compressed ore source (gas, moon
 materials). These are bought directly in both paths so totals remain comparable.
 
-### 10.3 Algorithm
+### 10.3 Algorithm — `_ore_candidates_for_mineral`
+
+For each mineral, collect ALL valid ore candidates (not just the cheapest):
 
 1. Run the BOM engine internally to get leaf node quantities (pass `logistics=0`).
 2. Aggregate leaves by `type_id` across the whole tree (`_collect_leaves` recurses).
 3. Pre-warm ESI cache: `_prefetch_ore_orders()` fetches all compressed ore type_ids
    and their refining byproducts in parallel using `ThreadPoolExecutor(max_workers=20)`.
-   This runs before the sequential per-mineral loop so all subsequent price lookups are
-   cache hits.
 4. For each leaf, call `get_ore_sources_for_mineral(type_id)` (returns compressed ores only).
 5. For each compressed ore candidate:
    ```
@@ -463,27 +475,31 @@ materials). These are bought directly in both paths so totals remain comparable.
    ore_units          = batches × portionSize
    ore_unit_price     = get_station_fill_price(...)    # None → skip this ore
    ```
-6. Compute byproduct credit (all refining outputs, including excess of target mineral):
+6. Compute logistics-adjusted byproduct credit:
    ```
-   for each output of this ore:
+   for each refining output of this ore:
        output_qty = floor(output.quantity × yield) × batches
        if output is the target mineral:
-           excess = output_qty - mineral_qty
-           credit += jita_buy_price[target] × excess   # excess from ceil rounding
+           leftover_qty = output_qty - mineral_qty     # excess from ceil rounding
        else:
-           credit += jita_buy_price[output] × output_qty
+           leftover_qty = output_qty                   # full byproduct amount
+       if leftover_qty <= 0: continue
+       buy_price        = jita_buy_price(out_type_id, leftover_qty)
+       logistics_per_unit = vol_per_unit × leftover_logistics_isk_per_m3
+       net_credit_per_unit = max(0, buy_price - logistics_per_unit)
+       byproduct_credit += net_credit_per_unit × leftover_qty
    ```
-7. `effective_cost = ore_unit_price × ore_units + refining_fee - credit`
-8. Pick ore with lowest `effective_cost` for each mineral.
+   Ores with bulky byproducts (large m³ per unit) become less attractive when the
+   haul rate is high, because the logistics cost erodes their byproduct credit.
+7. `effective_cost = ore_unit_price × ore_units + refining_fee − byproduct_credit`
+8. Append candidate; after all ores processed, sort list by `effective_cost` ascending.
 9. Items with no ore source go into `direct_items` in both paths.
 
-### 10.4 True Global Leftover Calculation
+### 10.4 True Global Leftover — `_compute_global_leftover`
 
-The per-mineral credit in step 6 slightly over-counts when the same ore produces two
-needed minerals (e.g. Scordite covers both Tritanium and Pyerite). Each mineral's
-independent ore selection credits the other's byproduct.
-
-**Fix**: After the per-mineral loop, compute the true global leftover:
+`_compute_global_leftover(ore_items, leaves, leftover_logistics_isk_per_m3, reprocessing_yield)`
+sums ALL refining outputs across ALL chosen ores, subtracts required quantities, and prices
+the true surplus at Jita buy minus haul cost:
 
 ```python
 total_produced: dict[int, (name, qty)] = {}
@@ -495,16 +511,49 @@ for each chosen ore_item:
 
 leftover_items = []
 for type_id, (name, qty_produced) in total_produced.items():
-    qty_needed = leaves.get(type_id, 0)
-    surplus = qty_produced - qty_needed
-    if surplus > 0:
-        buy_price = jita_buy_price(type_id, surplus)
-        leftover_items.append(LeftoverItem(...))
+    surplus = qty_produced - leaves.get(type_id, 0)
+    if surplus <= 0: continue
+    gross_isk    = jita_buy_price(type_id, surplus) × surplus
+    logistics    = vol_per_unit × surplus × leftover_logistics_isk_per_m3
+    net_isk      = max(0, gross_isk - logistics)
+    leftover_items.append(LeftoverItem(... volume_m3, logistics_isk, net_isk))
+
+leftover_net_isk = max(0, sum(gross) - sum(logistics))
 ```
 
-This is the only correct surplus figure. The per-item `byproduct_credit` fields in
-`ore_items` remain slightly over-counted and are only used for per-ore comparison, not
-the global leftover total.
+The per-item `byproduct_credit` in `ore_items` may be slightly over-counted (see section
+15 gotcha 8). `leftover_net_isk` from `_compute_global_leftover` is the authoritative figure
+used for all frontend cost comparisons.
+
+### 10.5 Two-Pass Optimisation for `max_leftover_isk`
+
+**Pass 1**: select `candidates[0]` (lowest logistics-adjusted effective_isk) for each mineral.
+Compute global leftover with `_compute_global_leftover`.
+
+**Pass 2** (only when `max_leftover_isk` is set and `leftover_net_isk > max_leftover_isk`):
+
+```
+repeat up to 30 times:
+    if leftover_net_isk <= max_leftover_isk: break
+
+    for each mineral:
+        for each alternative ore (not current selection):
+            test_items = swap this ore in
+            _, _, _, test_net = _compute_global_leftover(test_items, ...)
+            reduction = leftover_net_isk - test_net
+
+    apply the swap with the greatest reduction
+    recompute global leftover
+    if no swap reduces leftover: break   # constraint is impossible
+```
+
+Each iteration picks the single best swap across all minerals. After 30 iterations (or
+when no improving swap exists) the loop exits. If `leftover_net_isk` still exceeds the
+limit, `leftover_constraint_met = false` is returned.
+
+**Constraint-impossible fallback**: the frontend detects `leftover_constraint_met === false`,
+shows a short muted note ("Leftover limit impossible with compressed ore — direct buy price
+used"), and falls back to direct-buy costs in the breakdown. The leftover section is hidden.
 
 ---
 
@@ -535,31 +584,34 @@ Three files: `index.html`, `style.css`, `app.js`.
   status colour-coded (green ≥0.5, yellow 0.1–0.5, red <0.1).
 - **Calculate**: fires `/build-cost` and `/compare-material-source` in parallel (`Promise.all`).
   Results appear together; if compare fails, build results still show.
-- **Cost breakdown table**: shows each component as ISK and % of total. When leftover credit
-  is present, switches to "Net total cost" headline and recalculates all percentages against
-  the net total (ore path costs replace direct-buy material costs).
+- **Cost breakdown table**: shows each component as ISK and % of total. When
+  `leftover_net_isk > 0` AND `leftover_constraint_met`, switches to "Net total cost"
+  headline and uses ore path costs (`co.total_isk + co.refining_fee`) as material cost
+  basis. Net total = ore + fees − `leftover_net_isk`. If `leftover_constraint_met` is
+  false, a muted note appears below the headline and direct-buy costs are used instead.
 - **BPC table**: all non-leaf BOM nodes with `bpc_copies_needed > 0`, collected by
   `collectBPC()` tree walk. Shows copies needed, max runs/copy, total runs.
 - **Compare table**: Direct buy vs compressed ore side-by-side. Shows:
-  - Net material cost (ore − leftover credit)
+  - Net material cost (ore purchase − `leftover_net_isk`)
   - Ore purchase cost (sub-row)
-  - Leftover credit (sub-row)
+  - Leftover credit sub-row = `−leftover_net_isk`; when logistics > 0, two further
+    indented sub-rows show gross sell value and `−haul cost`
   - Refining fee
-  - Net total
-  - Volume to haul (compressed ore m³)
-  - Volume after refining (mineral m³)
-  Winning path highlighted green.
+  - Net total = `co.total_isk + co.refining_fee − leftover_net_isk`
+  - Volume to haul (compressed ore m³) and volume after refining
+  Winning path determined by net total; winner highlighted green.
 - **Ore breakdown table**: one row per ore item. Shows ore cost, refining fee, byproduct
-  credit, effective ISK, volume m³. `direct_items` (no ore source) shown as "direct buy" rows.
+  credit (logistics-adjusted), effective ISK, volume m³. `direct_items` shown as "direct buy".
 - **Shopping list section**: two tabs, EVE multibuy format (`Item Name x Quantity` per line).
-  - Tab 1 "Compressed ore": compressed ore items + `-- Sell leftovers --` separator + leftover items
+  - Tab 1 "Compressed ore": ores aggregated + `-- Sell leftovers --` separator + leftover items
   - Tab 2 "Direct buy": minerals bought directly
-  - Tab labels show upfront purchase cost (ore tab = `co.total_isk`, direct tab = `db.total_isk`)
-  - Cheaper tab marked with ✓; cheaper determination uses `co.effective_isk` vs direct cost
-  - Defaults to the cheaper tab
-  - Copy button: copies textarea content, briefly shows "Copied!" confirmation
-- **Leftover materials section**: table of surplus minerals after refining, with Jita buy
-  price per unit and total ISK. Total leftover value shown in footer.
+  - Tab labels show upfront purchase cost (`co.total_isk` / `db.total_isk`)
+  - Cheaper badge (✓) determined by `co.total_isk + co.refining_fee − leftover_net_isk` vs direct
+  - Defaults to cheaper tab; Copy button with "Copied!" flash
+- **Leftover materials section**: hidden when `leftover_constraint_met` is false.
+  When visible: shows Material / Quantity / Jita buy / Total ISK (no-logistics layout) or
+  Material / Quantity / Jita buy / Volume / Haul cost / Net value (logistics layout).
+  Footer shows gross value, haul cost, and net leftover credit when logistics > 0.
 - **BOM tree**: recursive DOM rendering. Click any parent node to collapse/expand children.
   Shows quantity, total cost, and BPC info per node.
 - **Enter key**: triggers Calculate when focus is on an input (unless an autocomplete
@@ -570,11 +622,15 @@ Three files: `index.html`, `style.css`, `app.js`.
 `app.js` is served with a `?v=N` query string in `index.html`. Increment `N` on every
 change to force browsers to fetch the updated file.
 
-### Dropdowns
+### Form inputs
 
 - **Buy from**: `jita_sell | jita_buy | amarr_sell | amarr_buy`
 - **FW Bonus**: `None (0) | Level 1–5`
 - **Structure bonus**: `EC no rig (1%) | EC + T1 rig (4%) | EC + T2 rig (5.5%)`
+- **Max leftover value (ISK)**: optional number input; empty = no limit. Sent only to
+  `/compare-material-source`, not to `/build-cost`.
+- **Leftover haul cost (ISK/m³)**: ISK per m³ to move surplus minerals to Jita. Sent
+  only to `/compare-material-source`.
 
 ---
 
@@ -667,27 +723,40 @@ class CompressedOreItem(BaseModel):
     ore_type_id: int; ore_name: str
     for_mineral_type_id: int; for_mineral_name: str
     quantity: int; unit_price: ISK
-    total_isk: ISK          # raw ore purchase price
+    total_isk: ISK           # raw ore purchase price
     refining_fee: ISK
-    byproduct_credit: ISK   # per-ore estimate (slightly over-counted — see section 10.4)
-    effective_isk: ISK      # total_isk + refining_fee − byproduct_credit
-    volume_m3: ISK          # compressed ore volume (haul to refinery)
-    refined_m3: ISK         # total mineral volume produced after refining
+    byproduct_credit: ISK    # logistics-adjusted per-ore credit (see section 10.3 step 6)
+    effective_isk: ISK       # total_isk + refining_fee − byproduct_credit
+    volume_m3: ISK           # compressed ore volume (haul to refinery)
+    refined_m3: ISK          # total mineral volume produced after refining
 
 class LeftoverItem(BaseModel):
     type_id: int; name: str
     quantity: int; buy_price: ISK; total_isk: ISK
+    volume_m3: ISK = 0       # total m³ of this surplus item
+    logistics_isk: ISK = 0   # haul cost = volume_m3 × leftover_logistics_isk_per_m3
+    net_isk: ISK = 0         # total_isk − logistics_isk (≥ 0)
 
 class CompressedOrePath(BaseModel):
-    total_isk: ISK          # raw ore purchase price across all ore items
-    effective_isk: ISK      # total_isk + refining_fee − all per-ore byproduct credits
-    total_m3: ISK           # compressed ore volume + non-mineral direct volume
-    refined_total_m3: ISK   # total mineral volume after refining + non-mineral direct
+    total_isk: ISK            # raw ore purchase price across all ore items
+    effective_isk: ISK        # sum of per-ore effective_isk (used for ore selection display)
+    total_m3: ISK             # compressed ore volume + non-mineral direct volume
+    refined_total_m3: ISK     # total mineral volume after refining + non-mineral direct
     refining_fee: ISK
     ore_items: list[CompressedOreItem]
     direct_items: list[DirectBuyItem]
     leftover_items: list[LeftoverItem] = []
-    leftover_total_isk: ISK = Decimal("0")
+    leftover_total_isk: ISK = 0        # gross Jita buy value of all surplus
+    leftover_logistics_isk: ISK = 0    # total haul cost for all surplus
+    leftover_net_isk: ISK = 0          # leftover_total_isk − leftover_logistics_isk
+    leftover_constraint_met: bool = True  # False when max_leftover_isk unachievable
+
+class CompareMaterialSourceRequest(BuildCostRequest):
+    reprocessing_yield: float = 0.876
+    reprocessing_rate: Decimal = Decimal("0.02")
+    refinery_bonus: float = 0.0
+    leftover_logistics_isk_per_m3: Decimal = Decimal("0")
+    max_leftover_isk: Decimal | None = None
 ```
 
 ---
@@ -734,6 +803,14 @@ class CompressedOrePath(BaseModel):
     ore path costs (`co.total_isk + co.refining_fee`) as the material cost basis in the
     breakdown — not the direct-buy `material_costs` field. Mixing the two paths gives a
     negative net total.
+
+11. **Always use `leftover_net_isk` for comparisons**, never `leftover_total_isk`. The
+    gross value ignores the haul cost and overstates the credit when logistics > 0.
+
+12. **`leftover_constraint_met = false` means fall back entirely to direct buy**. The
+    ore path numbers are still present in the response (for the compare table), but the
+    cost breakdown and headline must use direct-buy costs. Do not show the leftover section
+    in this state — it would imply the ore path is active when it is not.
 
 ---
 

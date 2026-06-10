@@ -8,9 +8,10 @@ exactly for job fees, material efficiency, and market fill prices.
 
 - **Full recursive BOM** with manufacturing + reaction job fees, ME bonus, FW bonus
 - **Station-specific fill pricing** — Jita 4-4 or Amarr EFA, sell or buy side, volume-weighted
-- **Compressed ore comparison** — side-by-side direct buy vs buy compressed ore + refine, with byproduct credit and leftover surplus valuation
+- **Compressed ore comparison** — side-by-side direct buy vs buy compressed ore + refine, with logistics-adjusted byproduct credit and true global leftover surplus
+- **Leftover optimisation** — set a max leftover value (ISK) and/or a haul cost (ISK/m³); the engine greedily swaps ore choices to stay within the limit; falls back to direct buy with a note if the constraint is impossible
 - **Shopping list** — EVE multibuy format, two tabs (compressed ore / direct buy), cheapest tab pre-selected
-- **Leftover materials** — surplus minerals from ceil() rounding, priced at Jita buy
+- **Leftover materials** — surplus minerals with gross value, haul cost, and net credit columns
 - **ESI disk cache** — SQLite persistent cache survives server restarts; parallel pre-fetch before compare loop
 - **BPC copy counts** at every BOM node
 
@@ -73,12 +74,22 @@ Same fields as build-cost, plus:
 {
   "reprocessing_yield": 0.876,
   "reprocessing_rate": 0.02,
-  "refinery_bonus": 0.0
+  "refinery_bonus": 0.0,
+  "leftover_logistics_isk_per_m3": 500,
+  "max_leftover_isk": 50000000
 }
 ```
 
-Returns: `direct_buy` and `compressed_ore` paths with ISK totals, m³ volumes,
-per-ore breakdown, and leftover mineral surplus priced at Jita buy.
+`leftover_logistics_isk_per_m3`: ISK/m³ cost to haul surplus minerals to Jita. Deducted
+from byproduct credit during ore selection — ores with bulky byproducts score worse when
+this is non-zero.
+
+`max_leftover_isk`: optional cap on net leftover value. The engine runs a greedy swap loop
+(up to 30 iterations) to find ore combinations that satisfy the limit. If impossible,
+`leftover_constraint_met: false` is returned and the frontend falls back to direct-buy price.
+
+Returns: `direct_buy` and `compressed_ore` paths with ISK totals, m³ volumes, per-ore
+breakdown, and leftover surplus with `volume_m3`, `logistics_isk`, and `net_isk` per item.
 
 ### `POST /api/v1/refine-cost`
 
