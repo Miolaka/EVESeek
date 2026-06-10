@@ -1,22 +1,27 @@
 # EVESeek
 
-EVE Online manufacturing cost calculator. Computes full supply-chain build cost from raw materials to finished ship, replicating Eve's in-game formulas exactly.
+EVE Online manufacturing cost calculator. Given an item to build, computes the full
+supply-chain cost from raw materials to finished product — replicating in-game formulas
+exactly for job fees, material efficiency, and market fill prices.
 
 ## Features
 
-- Full recursive BOM (Bill of Materials) — manufacturing, reactions, refining
-- Accurate job fee calculation (manufacturing, reaction, refining)
-- Configurable logistics cost (ISK per m³)
-- Regional market prices via ESI
-- Material efficiency (ME) support
-- Faction Warfare bonus support
-- Decimal precision for all ISK values
+- **Full recursive BOM** with manufacturing + reaction job fees, ME bonus, FW bonus
+- **Station-specific fill pricing** — Jita 4-4 or Amarr EFA, sell or buy side, volume-weighted
+- **Compressed ore comparison** — side-by-side direct buy vs buy compressed ore + refine, with byproduct credit and leftover surplus valuation
+- **Shopping list** — EVE multibuy format, two tabs (compressed ore / direct buy), cheapest tab pre-selected
+- **Leftover materials** — surplus minerals from ceil() rounding, priced at Jita buy
+- **ESI disk cache** — SQLite persistent cache survives server restarts; parallel pre-fetch before compare loop
+- **BPC copy counts** at every BOM node
 
 ## Stack
 
-- **Backend**: Python, FastAPI
-- **Data**: Eve SDE (Fuzzwork SQLite + Hoboleaks JSON)
-- **Market data**: ESI (Eve Swagger Interface)
+- **Backend**: Python 3.11+, FastAPI, Uvicorn
+- **Static data**: Fuzzwork SDE SQLite (`data/eve.db`, 528 MB) — blueprints, materials, volumes, systems
+- **Live data**: ESI public API — market orders, adjusted prices, system cost indices
+- **HTTP client**: httpx (sync)
+- **Precision**: Python `Decimal` for all ISK values
+- **Frontend**: Vanilla HTML/CSS/JS, no build step
 
 ## Setup
 
@@ -25,47 +30,75 @@ EVE Online manufacturing cost calculator. Computes full supply-chain build cost 
 mamba install fastapi uvicorn httpx -c conda-forge
 ```
 
-**2. Download SDE data**
+**2. Download SDE** (~528 MB, one-time)
 ```bash
-python scripts/download_fuzzwork_sde.py   # item types, volumes
-python scripts/download_sde.py            # blueprint & industry data
+python scripts/download_fuzzwork_sde.py
 ```
 
 **3. Run**
 ```bash
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --port 8005
 ```
 
-API docs available at `http://localhost:8000/docs`
+Open `http://localhost:8005` — API docs at `http://localhost:8005/docs`.
 
 ## API
 
 ### `POST /api/v1/build-cost`
 
-Calculates full build cost for an item.
-
 ```json
 {
-  "type_id": 28606,
-  "region_id": 10000002,
-  "system_id": 30000142,
-  "me_level": 10,
-  "structure_bonus": 0.04,
-  "fw_level": 0,
+  "type_id": 73793,
+  "system_id": 30002086,
   "runs": 1,
+  "me_level": 10,
   "material_source": "jita_sell",
-  "logistics_cost_isk_per_m3": 800
+  "structure_bonus": 0.01,
+  "fw_level": 0,
+  "facility_tax": 0.0025,
+  "logistics_cost_isk_per_m3": 0
 }
 ```
 
-### `GET /api/v1/search?q=paladin`
+`material_source`: `"jita_sell"` | `"jita_buy"` | `"amarr_sell"` | `"amarr_buy"`
 
-Search items by name.
+Returns: `total_cost`, `cost_breakdown` (material / manufacturing / reaction / logistics),
+and a full `bom_tree` with `bpc_copies_needed` and `max_runs_per_bpc` at each node.
 
-## Project Status
+### `POST /api/v1/compare-material-source`
 
-- [x] SDE download scripts
-- [x] FastAPI scaffold, ESI client, SDE query layer
-- [ ] BOM engine (recursive)
-- [ ] Cost calculators
-- [ ] Frontend UI
+Same fields as build-cost, plus:
+
+```json
+{
+  "reprocessing_yield": 0.876,
+  "reprocessing_rate": 0.02,
+  "refinery_bonus": 0.0
+}
+```
+
+Returns: `direct_buy` and `compressed_ore` paths with ISK totals, m³ volumes,
+per-ore breakdown, and leftover mineral surplus priced at Jita buy.
+
+### `POST /api/v1/refine-cost`
+
+```json
+{
+  "type_id": 1230,
+  "quantity": 10000,
+  "reprocessing_yield": 0.876,
+  "reprocessing_rate": 0.02,
+  "structure_bonus": 0.0,
+  "fw_level": 0
+}
+```
+
+Returns: refining fee and list of mineral outputs with quantities.
+
+### `GET /api/v1/search?q=phoenix`
+
+Returns `[{type_id, name}]` for published items matching the query.
+
+### `GET /api/v1/search-systems?q=jita`
+
+Returns `[{system_id, name, security}]` for matching solar systems.

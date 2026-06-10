@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EVESeek</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1>EVESeek</h1>
+    <span>Manufacturing Cost Calculator</span>
+  </header>
+
+  <main>
+    <div class="form-card">
+      <div class="form-grid">
+        <!-- Row 1: Item + System -->
+        <div class="form-group">
+          <label>Item to build</label>
+          <div class="autocomplete-wrap">
+            <input id="item-search" type="text" placeholder="Search item name…" autocomplete="off">
+            <ul id="item-list" class="autocomplete-list"></ul>
+          </div>
+          <input id="item-id" type="hidden">
+        </div>
+        <div class="form-group">
+          <label>Build system</label>
+          <div class="autocomplete-wrap">
+            <input id="system-search" type="text" placeholder="Search system name…" autocomplete="off">
+            <ul id="system-list" class="autocomplete-list"></ul>
+          </div>
+          <input id="system-id" type="hidden">
+        </div>
+
+        <!-- Row 2: Runs / ME / FW / Buy from -->
+        <div class="form-row">
+          <div class="form-group" style="max-width:90px">
+            <label>Runs</label>
+            <input id="runs" type="number" value="1" min="1">
+          </div>
+          <div class="form-group" style="max-width:80px">
+            <label>ME</label>
+            <input id="me-level" type="number" value="10" min="0" max="10">
+          </div>
+          <div class="form-group" style="max-width:110px">
+            <label>FW bonus</label>
+            <select id="fw-level">
+              <option value="0">None</option>
+              <option value="1">Level 1</option>
+              <option value="2">Level 2</option>
+              <option value="3">Level 3</option>
+              <option value="4">Level 4</option>
+              <option value="5">Level 5</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Buy from</label>
+            <select id="material-source">
+              <option value="jita_sell">Jita 4-4 sell</option>
+              <option value="jita_buy">Jita 4-4 buy</option>
+              <option value="amarr_sell">Amarr EFA sell</option>
+              <option value="amarr_buy">Amarr EFA buy</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Row 3: Logistics / Structure / Calculate -->
+        <div class="form-row">
+          <div class="form-group" style="max-width:160px">
+            <label>Logistics (ISK/m³)</label>
+            <input id="logistics" type="number" value="0" min="0" step="100">
+          </div>
+          <div class="form-group" style="max-width:160px">
+            <label>Structure bonus</label>
+            <select id="structure-bonus">
+              <option value="0.01">EC — no rig (1%)</option>
+              <option value="0.04">EC + T1 rig (4%)</option>
+              <option value="0.055">EC + T2 rig (5.5%)</option>
+            </select>
+          </div>
+          <div class="form-group" style="justify-content:flex-end">
+            <label>&nbsp;</label>
+            <button class="btn" id="calc-btn" onclick="calculate()">Calculate</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="error-box" class="error-box" style="display:none"></div>
+    <div id="results">
+      <!-- Total -->
+      <div class="section">
+        <div class="total-line">
+          <span class="label" id="total-label">Total cost </span>
+          <span id="total-cost" class="isk"></span>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Cost component</th>
+              <th class="num">ISK</th>
+              <th class="num">%</th>
+            </tr>
+          </thead>
+          <tbody id="breakdown-body"></tbody>
+        </table>
+      </div>
+
+      <hr class="divider">
+
+      <!-- Shopping list -->
+      <div class="section" id="shopping-section" style="display:none">
+        <div class="section-title">Shopping list</div>
+        <div class="shop-tabs">
+          <button class="shop-tab" id="tab-ore" onclick="switchShopTab('ore')"></button>
+          <button class="shop-tab" id="tab-direct" onclick="switchShopTab('direct')"></button>
+        </div>
+        <div class="shop-body">
+          <textarea id="shopping-list" class="shopping-list" readonly spellcheck="false"></textarea>
+          <button class="btn-copy" id="copy-btn" onclick="copyShoppingList()">Copy</button>
+        </div>
+      </div>
+
+      <hr class="divider">
+
+      <!-- BPC table -->
+      <div class="section" id="bpc-section">
+        <div class="section-title">BPC runs needed</div>
+        <table>
+          <thead>
+            <tr>
+              <th>Blueprint</th>
+              <th class="num">Copies needed</th>
+              <th class="num">Max runs/copy</th>
+              <th class="num">Total runs</th>
+            </tr>
+          </thead>
+          <tbody id="bpc-body"></tbody>
+        </table>
+      </div>
+
+      <hr class="divider">
+
+      <!-- Source comparison -->
+      <div class="section" id="compare-section" style="display:none">
+        <div class="section-title">Material source comparison</div>
+        <table class="compare-table">
+          <thead>
+            <tr>
+              <th></th>
+              <th>Direct buy</th>
+              <th>Compressed ore + refine</th>
+            </tr>
+          </thead>
+          <tbody id="compare-summary-body"></tbody>
+        </table>
+        <br>
+        <div class="section-title">Ore breakdown</div>
+        <table>
+          <thead>
+            <tr>
+              <th>Ore</th>
+              <th>For mineral</th>
+              <th class="num">Units</th>
+              <th class="num">Ore cost</th>
+              <th class="num">Refining fee</th>
+              <th class="num">Byproduct credit</th>
+              <th class="num">Effective ISK</th>
+              <th class="num">Ore m³</th>
+              <th class="num">Refined m³</th>
+            </tr>
+          </thead>
+          <tbody id="ore-body"></tbody>
+        </table>
+      </div>
+
+      <!-- Leftover materials -->
+      <div class="section" id="leftover-section" style="display:none">
+        <div class="section-title">Leftover materials — sell at Jita buy</div>
+        <table>
+          <thead>
+            <tr>
+              <th>Material</th>
+              <th class="num">Quantity</th>
+              <th class="num">Jita buy price</th>
+              <th class="num">Total ISK</th>
+            </tr>
+          </thead>
+          <tbody id="leftover-body"></tbody>
+          <tfoot>
+            <tr>
+              <td colspan="3" style="text-align:right; color:var(--text-muted); font-size:12px">Total leftover value</td>
+              <td class="num green" id="leftover-total"></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+      <hr class="divider">
+
+      <!-- BOM tree -->
+      <div class="section">
+        <div class="section-title">Bill of materials</div>
+        <div id="bom-tree" class="bom-tree"></div>
+      </div>
+    </div>
+  </main>
+
+  <script src="/app.js?v=6"></script>
+</body>
+</html>

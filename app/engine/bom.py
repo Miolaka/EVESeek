@@ -1,22 +1,19 @@
+import math
 from decimal import Decimal
-from typing import Optional
 from app.data import sde
 from app.esi import client as esi
 from app.core.utils import (
     ceil_qty,
     broker_fee_rate,
     job_cost_manufacturing,
-    job_cost_refining,
 )
 from app.models.schemas import BOMNode, BuildCostRequest, CostBreakdown
 
 ACTIVITY_MANUFACTURING = 1
 ACTIVITY_REACTION = 11
 
-# Stop recursing at these — raw inputs with no blueprint
 _RAW_CATEGORY_IDS = {
-    25,   # Asteroid (ore)
-    22,   # Mineral (after refining — already a leaf)
+    25,   # Asteroid (ore) — no blueprint, stops via blueprint is None too
     18,   # Drone
 }
 _RAW_GROUP_IDS = {
@@ -24,6 +21,14 @@ _RAW_GROUP_IDS = {
     423,  # Ice Products
     426,  # Compressed Ice
     873,  # Gas Cloud
+}
+
+# Maps material_source → (station_id, is_buy_order)
+_STATION_MAP: dict[str, tuple[int, bool]] = {
+    "jita_sell":  (60003760, False),
+    "jita_buy":   (60003760, True),
+    "amarr_sell": (60008494, False),
+    "amarr_buy":  (60008494, True),
 }
 
 
@@ -48,28 +53,29 @@ def _add_breakdowns(a: CostBreakdown, b: CostBreakdown) -> CostBreakdown:
     )
 
 
-def _market_price(type_id: int, req: BuildCostRequest) -> Decimal:
-    if req.material_source == "jita_sell":
-        price = esi.get_best_sell(req.region_id, type_id)
-    else:
-        price = esi.get_best_buy(req.region_id, type_id)
-
+def _market_price(type_id: int, quantity: int, req: BuildCostRequest) -> Decimal:
+    station_id, is_buy = _STATION_MAP[req.material_source]
+    region_id = esi.STATION_REGION[station_id]
+    price = esi.get_station_fill_price(region_id, type_id, station_id, quantity, is_buy)
     if price is None:
         return Decimal("0")
-
-    if req.material_source == "jita_buy":
+    if is_buy:
         fee = broker_fee_rate(
             req.broker_relations_level,
             req.faction_standing,
             req.corp_standing,
         )
         price = price * (1 + fee)
-
     return price
 
 
 def _logistics(volume: Decimal, quantity: int, req: BuildCostRequest) -> Decimal:
     return volume * quantity * req.logistics_cost_isk_per_m3
+
+
+def _is_raw_category(type_row) -> bool:
+    group_row = sde.get_group(type_row["groupID"])
+    return group_row is not None and group_row["categoryID"] in _RAW_CATEGORY_IDS
 
 
 def _build_node(
@@ -86,7 +92,6 @@ def _build_node(
     breakdown = _zero_breakdown()
     children: list[BOMNode] = []
 
-    # Leaf: raw material or max depth — price from market
     blueprint = sde.get_blueprint_for_product(type_id)
     is_raw = (
         group_id in _RAW_GROUP_IDS
@@ -96,7 +101,7 @@ def _build_node(
     )
 
     if is_raw:
-        unit_price = _market_price(type_id, req)
+        unit_price = _market_price(type_id, quantity, req)
         total_cost = unit_price * quantity
         breakdown.material_costs = total_cost
         breakdown.logistics_costs = _logistics(volume, quantity, req)
@@ -113,13 +118,17 @@ def _build_node(
 
     bp_type_id = blueprint["blueprint_type_id"]
     activity_id = blueprint["activityID"]
+    qty_per_run = blueprint["quantity"] or 1
 
-    # Get materials for this blueprint activity
+    max_runs_per_bpc = sde.get_max_production_limit(bp_type_id)
+    bpc_copies_needed = math.ceil(quantity / (max_runs_per_bpc * qty_per_run))
+
+    me = req.me_overrides.get(type_id, req.me_level)
     materials = sde.get_activity_materials(bp_type_id, activity_id)
 
     for mat in materials:
         mat_type_id = mat["materialTypeID"]
-        mat_qty = ceil_qty(mat["quantity"], req.runs, req.me_level)
+        mat_qty = ceil_qty(mat["quantity"], req.runs, me)
         child = _build_node(mat_type_id, mat_qty, req, depth + 1)
         children.append(child)
         breakdown = _add_breakdowns(breakdown, child.cost_breakdown)
@@ -149,7 +158,6 @@ def _build_node(
         ) * req.runs
         breakdown.reaction_fees += fee
 
-    # Logistics for this node's output
     breakdown.logistics_costs += _logistics(volume, quantity, req)
 
     total_cost = (
@@ -168,19 +176,12 @@ def _build_node(
         total_cost=total_cost,
         cost_breakdown=breakdown,
         children=children,
+        bpc_copies_needed=bpc_copies_needed,
+        max_runs_per_bpc=max_runs_per_bpc,
     )
 
 
-def _is_raw_category(type_row) -> bool:
-    """Check invTypes category via group lookup."""
-    group_row = sde.get_group(type_row["groupID"])
-    if group_row and group_row["categoryID"] in _RAW_CATEGORY_IDS:
-        return True
-    return False
-
-
 def build_cost(req: BuildCostRequest):
-    """Entry point — returns a fully costed BOM tree for the requested item."""
     from app.models.schemas import BuildCostResponse
 
     type_row = sde.get_type(req.type_id)
