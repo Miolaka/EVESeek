@@ -1,14 +1,17 @@
 from fastapi import APIRouter, HTTPException
 from app.models.schemas import BuildCostRequest, BuildCostResponse
 from app.data import sde
+from app.engine.bom import build_cost as _build_cost
 
 router = APIRouter()
 
 
 @router.post("/build-cost", response_model=BuildCostResponse)
 async def build_cost(req: BuildCostRequest):
-    # TODO: implement BOM engine
-    raise HTTPException(status_code=501, detail="BOM engine not yet implemented")
+    try:
+        return _build_cost(req)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.get("/search")
