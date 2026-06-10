@@ -84,6 +84,18 @@
             <button class="btn" id="calc-btn" onclick="calculate()">Calculate</button>
           </div>
         </div>
+
+        <!-- Row 4: Leftover optimisation -->
+        <div class="form-row">
+          <div class="form-group" style="max-width:200px">
+            <label>Max leftover value (ISK)</label>
+            <input id="max-leftover-isk" type="number" value="" min="0" step="1000000" placeholder="No limit">
+          </div>
+          <div class="form-group" style="max-width:200px">
+            <label>Leftover haul cost (ISK/m³)</label>
+            <input id="leftover-logistics" type="number" value="0" min="0" step="100">
+          </div>
+        </div>
       </div>
     </div>
 
@@ -177,23 +189,12 @@
 
       <!-- Leftover materials -->
       <div class="section" id="leftover-section" style="display:none">
-        <div class="section-title">Leftover materials — sell at Jita buy</div>
-        <table>
-          <thead>
-            <tr>
-              <th>Material</th>
-              <th class="num">Quantity</th>
-              <th class="num">Jita buy price</th>
-              <th class="num">Total ISK</th>
-            </tr>
-          </thead>
+        <div class="section-title">Leftover materials</div>
+        <div id="leftover-warning" class="leftover-warning" style="display:none"></div>
+        <table id="leftover-table">
+          <thead id="leftover-thead"></thead>
           <tbody id="leftover-body"></tbody>
-          <tfoot>
-            <tr>
-              <td colspan="3" style="text-align:right; color:var(--text-muted); font-size:12px">Total leftover value</td>
-              <td class="num green" id="leftover-total"></td>
-            </tr>
-          </tfoot>
+          <tfoot id="leftover-tfoot"></tfoot>
         </table>
       </div>
 
@@ -207,6 +208,6 @@
     </div>
   </main>
 
-  <script src="/app.js?v=6"></script>
+  <script src="/app.js?v=7"></script>
 </body>
 </html>

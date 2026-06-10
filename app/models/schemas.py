@@ -69,6 +69,8 @@ class CompareMaterialSourceRequest(BaseModel):
     reprocessing_yield: float = Field(0.876, ge=0.0, le=1.0)
     reprocessing_rate: Decimal = Field(Decimal("0.02"), ge=0)
     refinery_bonus: float = Field(0.0, ge=0.0, le=0.10)
+    leftover_logistics_isk_per_m3: Decimal = Field(Decimal("0"), ge=0)
+    max_leftover_isk: Decimal | None = None
 
 
 class DirectBuyItem(BaseModel):
@@ -107,6 +109,9 @@ class LeftoverItem(BaseModel):
     quantity: int
     buy_price: ISK
     total_isk: ISK
+    volume_m3: ISK = Decimal("0")    # total m³ of this surplus item
+    logistics_isk: ISK = Decimal("0") # haul cost to Jita = volume_m3 × rate
+    net_isk: ISK = Decimal("0")       # total_isk − logistics_isk (≥ 0)
 
 
 class CompressedOrePath(BaseModel):
@@ -119,6 +124,9 @@ class CompressedOrePath(BaseModel):
     direct_items: list[DirectBuyItem]
     leftover_items: list[LeftoverItem] = []
     leftover_total_isk: ISK = Decimal("0")
+    leftover_logistics_isk: ISK = Decimal("0")  # total haul cost for all leftovers
+    leftover_net_isk: ISK = Decimal("0")         # leftover_total_isk − leftover_logistics_isk
+    leftover_constraint_met: bool = True          # False if max_leftover_isk could not be satisfied
 
 
 class CompareMaterialSourceResponse(BaseModel):

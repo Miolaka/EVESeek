@@ -198,6 +198,14 @@ async function calculate() {
     logistics_cost_isk_per_m3: parseFloat(document.getElementById('logistics').value) || 0,
   };
 
+  // Compare-specific fields
+  const compareBody = { ...body };
+  compareBody.leftover_logistics_isk_per_m3 = parseFloat(document.getElementById('leftover-logistics').value) || 0;
+  const maxLeftoverRaw = document.getElementById('max-leftover-isk').value.trim();
+  if (maxLeftoverRaw !== '') {
+    compareBody.max_leftover_isk = parseFloat(maxLeftoverRaw);
+  }
+
   try {
     const [buildRes, compareRes] = await Promise.all([
       fetch('/api/v1/build-cost', {
@@ -208,7 +216,7 @@ async function calculate() {
       fetch('/api/v1/compare-material-source', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify(compareBody),
       }),
     ]);
 
@@ -236,15 +244,14 @@ async function calculate() {
 function renderBuild(data, compareData) {
   const bd = data.cost_breakdown;
   const co = compareData?.compressed_ore;
-  const leftover = co?.leftover_total_isk || 0;
-  const useOre = leftover > 0;
+  // Use net leftover (after haul cost) for all cost calculations
+  const leftoverNet = co?.leftover_net_isk || 0;
+  const useOre = leftoverNet > 0;
 
-  // Net total: when using ore path, replace direct-buy material cost with
-  // ore purchase + ore refining fee, then subtract leftover credit.
   const netTotal = useOre
     ? (co.total_isk + co.refining_fee
        + bd.manufacturing_fees + bd.reaction_fees + (bd.refining_fees || 0)
-       + bd.logistics_costs - leftover)
+       + bd.logistics_costs - leftoverNet)
     : data.total_cost;
 
   document.getElementById('total-cost').textContent = fmtISK(netTotal);
@@ -279,9 +286,9 @@ function renderBuild(data, compareData) {
   if (useOre) {
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td class="green">Leftover material credit</td>
-      <td class="num green">−${fmtISK(leftover)}</td>
-      <td class="num muted">${fmtPct(leftover / netTotal)}</td>
+      <td class="green">Leftover material credit (net)</td>
+      <td class="num green">−${fmtISK(leftoverNet)}</td>
+      <td class="num muted">${fmtPct(leftoverNet / netTotal)}</td>
     `;
     tbody.appendChild(tr);
 
@@ -300,8 +307,6 @@ function renderBuild(data, compareData) {
   const bpcBody = document.getElementById('bpc-body');
   bpcBody.innerHTML = '';
   if (bpcNodes.length) {
-    // include root if it has BPC info
-    const rootBpc = data.bom_tree.length === 0 ? null : null; // root not in bom_tree directly
     for (const node of bpcNodes) {
       const tr = document.createElement('tr');
       const totalRuns = node.bpc_copies_needed * node.max_runs_per_bpc;
@@ -330,33 +335,49 @@ function renderBuild(data, compareData) {
 function renderCompare(data) {
   const db = data.direct_buy;
   const co = data.compressed_ore;
-  const directWins = db.total_isk <= co.effective_isk;
-  const savings = Math.abs(db.total_isk - co.effective_isk);
+
+  // True net ore cost: purchase + refining fee - leftover net credit
+  const oreNetTotal = co.total_isk + co.refining_fee - (co.leftover_net_isk || 0);
+  const directWins = db.total_isk <= oreNetTotal;
+  const savings = Math.abs(db.total_isk - oreNetTotal);
   const savingsPct = db.total_isk > 0 ? (savings / db.total_isk * 100).toFixed(1) : '0';
 
   const summaryBody = document.getElementById('compare-summary-body');
   summaryBody.innerHTML = '';
 
-  const totalByproductCredit = (co.ore_items || []).reduce((s, i) => s + i.byproduct_credit, 0);
-  const oreNetMaterial = co.effective_isk - co.refining_fee;
+  const hasLogistics = (co.leftover_logistics_isk || 0) > 0;
+  const oreNetMaterial = co.total_isk - (co.leftover_net_isk || 0);  // excl. refining fee
 
   const rows = [
-    { label: 'Net material cost',    direct: fmtISK(db.total_isk),              ore: fmtISK(oreNetMaterial),              isNet: true, cls: 'isk' },
-    { label: '  ore purchase',       direct: '',                                  ore: fmtISK(co.total_isk),                sub: true,   cls: 'isk' },
-    { label: '  leftover credit',    direct: '',                                  ore: '−' + fmtISK(totalByproductCredit),  sub: true,   cls: 'isk' },
-    { label: 'Refining fee',         direct: '—',                                 ore: fmtISK(co.refining_fee),                          cls: 'isk' },
-    { label: 'Net total',            direct: fmtISK(db.total_isk),              ore: fmtISK(co.effective_isk),            isNet: true, cls: 'isk' },
-    { label: 'Volume to haul',       direct: fmtM3(db.total_m3),                ore: fmtM3(co.total_m3),                               cls: 'm3'  },
-    { label: '  minerals (direct)',  direct: fmtM3(db.total_m3),                ore: '',                                  sub: true,   cls: 'm3'  },
-    { label: '  compressed ore',     direct: '',                                  ore: fmtM3(co.total_m3),                  sub: true,   cls: 'm3'  },
-    { label: 'Volume after refining',direct: '—',                                ore: fmtM3(co.refined_total_m3),                       cls: 'm3'  },
+    { label: 'Net material cost',     direct: fmtISK(db.total_isk),    ore: fmtISK(oreNetMaterial),           isNet: true, cls: 'isk' },
+    { label: '  ore purchase',        direct: '',                        ore: fmtISK(co.total_isk),             sub: true,   cls: 'isk' },
+    { label: '  leftover credit',     direct: '',                        ore: '−' + fmtISK(co.leftover_net_isk || 0), sub: true, cls: 'isk' },
   ];
+
+  // Show logistics breakdown sub-rows only when haul cost is non-zero
+  if (hasLogistics) {
+    rows.push(
+      { label: '    sell value',       direct: '', ore: fmtISK(co.leftover_total_isk || 0),     sub: true, indent: true, cls: 'isk' },
+      { label: '    − haul cost',      direct: '', ore: '−' + fmtISK(co.leftover_logistics_isk || 0), sub: true, indent: true, cls: 'isk' },
+    );
+  }
+
+  rows.push(
+    { label: 'Refining fee',           direct: '—',                      ore: fmtISK(co.refining_fee),          cls: 'isk' },
+    { label: 'Net total',              direct: fmtISK(db.total_isk),    ore: fmtISK(oreNetTotal),              isNet: true, cls: 'isk' },
+    { label: 'Volume to haul',         direct: fmtM3(db.total_m3),      ore: fmtM3(co.total_m3),              cls: 'm3'  },
+    { label: '  minerals (direct)',    direct: fmtM3(db.total_m3),      ore: '',                               sub: true,   cls: 'm3'  },
+    { label: '  compressed ore',       direct: '',                        ore: fmtM3(co.total_m3),              sub: true,   cls: 'm3'  },
+    { label: 'Volume after refining',  direct: '—',                      ore: fmtM3(co.refined_total_m3),      cls: 'm3'  },
+  );
 
   for (const row of rows) {
     const tr = document.createElement('tr');
     const dClass = row.isNet && directWins ? 'compare-winner' : '';
     const cClass = row.isNet && !directWins ? 'compare-winner' : '';
-    const labelStyle = row.sub ? 'color:var(--text-muted);font-size:12px' : '';
+    const labelStyle = row.indent
+      ? 'color:var(--text-muted);font-size:11px;padding-left:32px'
+      : row.sub ? 'color:var(--text-muted);font-size:12px' : '';
     tr.innerHTML = `
       <td style="${labelStyle}">${row.label}</td>
       <td class="num ${row.cls} ${dClass}">${row.direct || ''}</td>
@@ -405,27 +426,100 @@ function renderCompare(data) {
 
   document.getElementById('compare-section').style.display = 'block';
   buildShoppingLists(data);
+  renderLeftovers(co);
+}
 
-  // Leftover materials
+// ── Leftover materials ────────────────────────────────────────────────────────
+
+function renderLeftovers(co) {
   const leftovers = co.leftover_items || [];
-  if (leftovers.length) {
-    const leftoverBody = document.getElementById('leftover-body');
-    leftoverBody.innerHTML = '';
-    for (const item of leftovers) {
-      const tr = document.createElement('tr');
+  if (!leftovers.length) {
+    document.getElementById('leftover-section').style.display = 'none';
+    return;
+  }
+
+  const hasLogistics = (co.leftover_logistics_isk || 0) > 0;
+  const constraintMet = co.leftover_constraint_met !== false;
+
+  // Constraint warning
+  const warning = document.getElementById('leftover-warning');
+  if (!constraintMet) {
+    warning.textContent = `⚠ Max leftover limit could not be fully satisfied — best available selection shown (net leftover: ${fmtISK(co.leftover_net_isk)})`;
+    warning.style.display = 'block';
+  } else {
+    warning.style.display = 'none';
+  }
+
+  // Table header
+  const thead = document.getElementById('leftover-thead');
+  if (hasLogistics) {
+    thead.innerHTML = `<tr>
+      <th>Material</th>
+      <th class="num">Quantity</th>
+      <th class="num">Jita buy</th>
+      <th class="num">Volume</th>
+      <th class="num">Haul cost</th>
+      <th class="num">Net value</th>
+    </tr>`;
+  } else {
+    thead.innerHTML = `<tr>
+      <th>Material</th>
+      <th class="num">Quantity</th>
+      <th class="num">Jita buy price</th>
+      <th class="num">Total ISK</th>
+    </tr>`;
+  }
+
+  // Table body
+  const tbody = document.getElementById('leftover-body');
+  tbody.innerHTML = '';
+  for (const item of leftovers) {
+    const tr = document.createElement('tr');
+    if (hasLogistics) {
+      tr.innerHTML = `
+        <td>${item.name}</td>
+        <td class="num">${fmtNum(item.quantity)}</td>
+        <td class="num isk">${fmtISK(item.buy_price)}</td>
+        <td class="num m3">${fmtM3(item.volume_m3)}</td>
+        <td class="num yellow">−${fmtISK(item.logistics_isk)}</td>
+        <td class="num green">${fmtISK(item.net_isk)}</td>
+      `;
+    } else {
       tr.innerHTML = `
         <td>${item.name}</td>
         <td class="num">${fmtNum(item.quantity)}</td>
         <td class="num isk">${fmtISK(item.buy_price)}</td>
         <td class="num green">${fmtISK(item.total_isk)}</td>
       `;
-      leftoverBody.appendChild(tr);
     }
-    document.getElementById('leftover-total').textContent = fmtISK(co.leftover_total_isk);
-    document.getElementById('leftover-section').style.display = 'block';
-  } else {
-    document.getElementById('leftover-section').style.display = 'none';
+    tbody.appendChild(tr);
   }
+
+  // Table footer
+  const tfoot = document.getElementById('leftover-tfoot');
+  if (hasLogistics) {
+    tfoot.innerHTML = `
+      <tr>
+        <td colspan="5" style="text-align:right; color:var(--text-muted); font-size:12px">Gross sell value</td>
+        <td class="num isk">${fmtISK(co.leftover_total_isk)}</td>
+      </tr>
+      <tr>
+        <td colspan="5" style="text-align:right; color:var(--text-muted); font-size:12px">Haul cost</td>
+        <td class="num yellow">−${fmtISK(co.leftover_logistics_isk)}</td>
+      </tr>
+      <tr>
+        <td colspan="5" style="text-align:right; color:var(--text-muted); font-size:12px">Net leftover credit</td>
+        <td class="num green">${fmtISK(co.leftover_net_isk)}</td>
+      </tr>`;
+  } else {
+    tfoot.innerHTML = `
+      <tr>
+        <td colspan="3" style="text-align:right; color:var(--text-muted); font-size:12px">Total leftover value</td>
+        <td class="num green">${fmtISK(co.leftover_total_isk)}</td>
+      </tr>`;
+  }
+
+  document.getElementById('leftover-section').style.display = 'block';
 }
 
 // ── Shopping list ─────────────────────────────────────────────────────────────
@@ -437,12 +531,10 @@ function buildShoppingLists(compareData) {
   const db = compareData.direct_buy;
   const co = compareData.compressed_ore;
 
-  // Tab 2 — direct buy: every leaf material bought straight from market
   _shopLists.direct = db.items
     .map(i => `${i.name} x ${i.quantity}`)
     .join('\n');
 
-  // Tab 1 — compressed ore: ores aggregated + non-mineral direct buys, then leftovers to sell
   const oreMap = new Map();
   for (const item of (co.ore_items || [])) {
     oreMap.set(item.ore_name, (oreMap.get(item.ore_name) || 0) + item.quantity);
@@ -459,9 +551,10 @@ function buildShoppingLists(compareData) {
 
   _shopLists.ore = buyLines + sellLines;
 
-  // Tab labels show upfront purchase cost; cheaper badge uses net cost
+  // True net cost comparison determines cheaper badge
+  const oreNetTotal = co.total_isk + co.refining_fee - (co.leftover_net_isk || 0);
   const directCost = db.total_isk;
-  const oreWins = co.effective_isk <= directCost;
+  const oreWins = oreNetTotal <= directCost;
 
   function tabHTML(label, displayCost, isCheaper) {
     return `<span class="shop-tab-label">${label}</span>`
@@ -471,7 +564,6 @@ function buildShoppingLists(compareData) {
   document.getElementById('tab-ore').innerHTML    = tabHTML('Compressed ore', co.total_isk, oreWins);
   document.getElementById('tab-direct').innerHTML = tabHTML('Direct buy',     directCost,   !oreWins);
 
-  // Default to the cheaper tab
   _activeShopTab = oreWins ? 'ore' : 'direct';
   document.getElementById('shopping-list').value = _shopLists[_activeShopTab];
   document.getElementById('tab-ore').classList.toggle('active',    _activeShopTab === 'ore');
