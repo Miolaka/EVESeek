@@ -196,6 +196,7 @@ async function calculate() {
     material_source: document.getElementById('material-source').value,
     structure_bonus: parseFloat(document.getElementById('structure-bonus').value),
     logistics_cost_isk_per_m3: parseFloat(document.getElementById('logistics').value) || 0,
+    build_t1_hull: document.getElementById('build-t1-hull').checked,
   };
 
   // Compare-specific fields

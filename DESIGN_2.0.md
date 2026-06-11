@@ -136,9 +136,11 @@ Reprocessing is NOT in ESI cost indices — it is a flat user-supplied rate.
 Pure math, no I/O. All formulas replicate in-game behavior.
 
 ```python
-def ceil_qty(base_qty: int, runs: int, me_level: int) -> int:
-    # EVE rounding rule: ceil at every BOM node, never at the final sum
-    return math.ceil(base_qty * runs * (1 - me_level * 0.01))
+def ceil_qty(base_qty: int, runs: int, me_level: int, structure_bonus: float = 0.0) -> int:
+    # EVE rounding rule: ceil per run first, then multiply by run count.
+    # structure_bonus reduces materials multiplicatively with ME (both applied inside ceil).
+    per_run = max(1, math.ceil(base_qty * (1 - me_level * 0.01) * (1 - structure_bonus)))
+    return per_run * runs
 ```
 
 ```python
@@ -183,7 +185,9 @@ get_type(type_id)
 get_blueprint_for_product(product_type_id)
 # Returns the blueprint that produces this item.
 # Searches activityID IN (1, 11) — manufacturing and reactions only.
-# LIMIT 1: some items have multiple blueprints; first match wins.
+# Filters bt.published = 1 to exclude "Test Reaction Blueprint" stubs (unpublished,
+# qty=20/run) that exist alongside the real published Reaction Formula (qty=10,000/run).
+# ORDER BY p.quantity DESC ensures the highest-output formula wins when duplicates exist.
 # Returns: blueprint_type_id, activityID, quantity (units produced per run)
 
 get_activity_materials(blueprint_type_id, activity_id)
@@ -280,21 +284,22 @@ Recursive BOM engine. Entry point: `build_cost(req: BuildCostRequest)`.
 ### 8.1 Recursion Stop Conditions
 
 A node is a leaf (buy from market, no further recursion) if ANY of:
-1. `group_id in _RAW_GROUP_IDS` — moon materials, ice products, compressed ice, gas cloud
+1. `group_id in _RAW_GROUP_IDS` — moon materials, ice products, harvestable gas
 2. `_is_raw_category(type_row)` — categoryID in {25 (Asteroid), 18 (Drone)} via group lookup
-3. `blueprint is None` — no manufacturing or reaction blueprint exists (catches minerals like
+3. `depth > 0 and not req.build_t1_hull and _is_ship(type_row)` — ship-as-ingredient treated
+   as market buy when the user opts not to manufacture the T1 hull (see section 8.8)
+4. `blueprint is None` — no manufacturing or reaction blueprint exists (catches minerals like
    Tritanium: they have no blueprint, so they stop here automatically)
-4. `depth >= 10` — safety limit
+5. `depth >= 10` — safety limit
 
 **Critical**: Do NOT add categoryID=4 (Material) to `_RAW_CATEGORY_IDS`. Reaction intermediates
 like Phenolic Composites also have categoryID=4. Adding it breaks reaction recursion.
 Minerals (Tritanium, Pyerite, etc.) have categoryID=4 but stop via `blueprint is None`.
 
 **Raw groups** (`_RAW_GROUP_IDS`):
-- `711` — Moon Materials
-- `423` — Ice Products
-- `426` — Compressed Ice
-- `873` — Gas Cloud
+- `427` — Moon Materials (Atmospheric Gases, Evaporite Deposits, Tungsten, Platinum, etc.)
+- `423` — Ice Products (Heavy Water, Liquid Ozone, isotopes, Strontium Clathrates)
+- `711` — Harvestable Cloud (gas cloud harvesting: Fullerites, etc.)
 
 **Raw categories** (`_RAW_CATEGORY_IDS`):
 - `25` — Asteroid (ore)
@@ -335,9 +340,14 @@ adjusted prices. Using input EIV gives ~209M ISK manufacturing fees vs ~1.4M ISK
 ### 8.4 ME Application
 
 ```python
-def ceil_qty(base_qty, runs, me_level):
-    return math.ceil(base_qty * runs * (1 - me_level * 0.01))
+def ceil_qty(base_qty, runs, me_level, structure_bonus=0.0):
+    per_run = max(1, math.ceil(base_qty * (1 - me_level * 0.01) * (1 - structure_bonus)))
+    return per_run * runs
 ```
+
+EVE rounds up per run, then multiplies by run count — not the other way around.
+`structure_bonus` (material reduction from EC rigs) is applied multiplicatively inside the
+same `ceil()`, not after. Both reductions must be inside the ceiling.
 
 Per-blueprint ME is looked up per node: `me = req.me_overrides.get(type_id, req.me_level)`.
 `me_overrides` is a `dict[int, int]` keyed by product `type_id`. If a type_id has no
@@ -349,22 +359,53 @@ Manufacturing fee applies to `activityID=1`. Reaction fee applies to `activityID
 Both use `job_cost_manufacturing()`. Reactions pass `facility_tax=0`.
 
 ```python
-fee = job_cost_manufacturing(eiv, cost_index, structure_bonus, facility_tax, fw_level) * runs
+runs_needed = math.ceil(quantity / qty_per_run)   # runs for THIS sub-job
+eiv = sum(adj_price[m] * base_qty[m] for m in materials) * runs_needed
+fee = job_cost_manufacturing(eiv, cost_index, structure_bonus, facility_tax, fw_level)
 ```
 
-The `* runs` multiplier: EVE charges per run. If the user is building 5 ships, fees are 5×.
+`runs_needed` is computed per node from `quantity / qty_per_run` — it is NOT the
+top-level `req.runs`. EIV is pre-scaled by `runs_needed`, so `job_cost_manufacturing`
+is called once and returns the total fee for all runs of this sub-job.
 
 ### 8.6 BPC Run Count
 
 ```python
-max_runs_per_bpc = sde.get_max_production_limit(bp_type_id)  # from industryBlueprints
-qty_per_run = blueprint["quantity"] or 1                      # from industryActivityProducts
-bpc_copies_needed = math.ceil(quantity / (max_runs_per_bpc * qty_per_run))
+qty_per_run  = blueprint["quantity"] or 1            # from industryActivityProducts
+runs_needed  = math.ceil(quantity / qty_per_run)     # runs needed for this node
+max_runs_per_bpc = sde.get_max_production_limit(bp_type_id)
+bpc_copies_needed = math.ceil(runs_needed / max_runs_per_bpc)
 ```
 
 Stored on every non-leaf `BOMNode`. Leaf nodes have `bpc_copies_needed=0`, `max_runs_per_bpc=0`.
 
-### 8.7 CostBreakdown Accumulation
+### 8.7 T1 Hull Build / Buy Toggle
+
+T2 ship blueprints list the matching T1 hull as a direct input (e.g. Paladin requires
+Apocalypse × 1). By default the engine recursively manufactures that hull — same as
+every other intermediate. When `req.build_t1_hull = False`, any ship ingredient
+(`_SHIP_CATEGORY_ID = 6`) encountered at depth > 0 is treated as a leaf and priced
+off market instead.
+
+Default is `True` (build). This matches game practice: minerals weigh nothing packaged,
+but buying a completed hull takes 500,000 m³ assembled — impossible to haul economically.
+
+```python
+_SHIP_CATEGORY_ID = 6   # EVE category 6 = Ships
+
+def _is_ship(type_row) -> bool:
+    group_row = sde.get_group(type_row["groupID"])
+    return group_row is not None and group_row["categoryID"] == _SHIP_CATEGORY_ID
+
+# Inside is_raw check:
+or (type_row and type_row["groupID"] and depth > 0
+    and not req.build_t1_hull and _is_ship(type_row))
+```
+
+T1 hull ingredients are always minerals + components, never another ship, so setting
+`build_t1_hull = True` will never trigger the ship-leaf check deeper in the tree.
+
+### 8.9 CostBreakdown Accumulation
 
 `CostBreakdown` fields accumulate up the tree:
 - `material_costs`: leaf market prices
@@ -627,6 +668,8 @@ change to force browsers to fetch the updated file.
 - **Buy from**: `jita_sell | jita_buy | amarr_sell | amarr_buy`
 - **FW Bonus**: `None (0) | Level 1–5`
 - **Structure bonus**: `EC no rig (1%) | EC + T1 rig (4%) | EC + T2 rig (5.5%)`
+- **Build T1 hull**: checkbox, default checked. Unchecked sends `build_t1_hull: false`
+  to both endpoints, which prices the T1 hull off market instead of recursing into it.
 - **Max leftover value (ISK)**: optional number input; empty = no limit. Sent only to
   `/compare-material-source`, not to `/build-cost`.
 - **Leftover haul cost (ISK/m³)**: ISK per m³ to move surplus minerals to Jita. Sent
@@ -694,9 +737,13 @@ class BuildCostRequest(BaseModel):
     broker_relations_level: int = Field(0, ge=0, le=5)
     faction_standing: float = Field(0.0, ge=-10.0, le=10.0)
     corp_standing: float = Field(0.0, ge=-10.0, le=10.0)
+    build_t1_hull: bool = True      # True = manufacture T1 hull; False = buy from market
 ```
 
 `region_id` was removed — derived from `material_source` via `esi.STATION_REGION`.
+`build_t1_hull`: when building a T2 ship, the T1 hull is a direct blueprint ingredient.
+`True` (default) recurses into it and manufactures it from minerals. `False` treats it
+as a leaf and prices it off market. See section 8.7.
 
 ### BOMNode
 
@@ -751,7 +798,9 @@ class CompressedOrePath(BaseModel):
     leftover_net_isk: ISK = 0          # leftover_total_isk − leftover_logistics_isk
     leftover_constraint_met: bool = True  # False when max_leftover_isk unachievable
 
-class CompareMaterialSourceRequest(BuildCostRequest):
+class CompareMaterialSourceRequest(BaseModel):
+    # All BuildCostRequest fields, plus:
+    build_t1_hull: bool = True      # inherited behaviour — see BuildCostRequest
     reprocessing_yield: float = 0.876
     reprocessing_rate: Decimal = Decimal("0.02")
     refinery_bonus: float = 0.0
@@ -811,6 +860,27 @@ class CompareMaterialSourceRequest(BuildCostRequest):
     ore path numbers are still present in the response (for the compare table), but the
     cost breakdown and headline must use direct-buy costs. Do not show the leftover section
     in this state — it would imply the ore path is active when it is not.
+
+13. **`ceil_qty` must round per run, not on the total**. The old formula
+    `ceil(base × runs × (1 - ME))` over-counts materials for multi-run reactions:
+    rounding once on the aggregate total is wrong because EVE rounds per job. The correct
+    formula rounds per run first, then multiplies: `max(1, ceil(base × (1-ME) × (1-sb))) × runs`.
+
+14. **`runs_needed` must be computed per BOM node, not from top-level `req.runs`**. Each
+    sub-job has its own run count: `runs_needed = ceil(quantity_needed / qty_per_run)`.
+    Using `req.runs` for sub-jobs gives the wrong EIV and wrong material quantities for
+    any intermediate with `qty_per_run > 1` (all reaction products).
+
+15. **Unpublished "Test Reaction Blueprint" stubs**. Some reaction products have two
+    blueprint rows: a published "Reaction Formula" (qty ≈ 10,000/run) and an unpublished
+    "Test Reaction Blueprint" (qty ≈ 20/run). Without `AND bt.published = 1` the test
+    stub can win `LIMIT 1`, producing 500× too many runs and cascading into millions of
+    moon material inputs. Always filter `published = 1` and order by `quantity DESC`.
+
+16. **Moon material group ID is 427, not 711**. Group 711 is Harvestable Cloud (gas
+    Fullerites). Moon materials (Atmospheric Gases, Evaporite Deposits, Tungsten, Platinum,
+    Cobalt, etc.) live in group 427. Using the wrong group ID causes moon material nodes
+    to recurse instead of being treated as market leaves.
 
 ---
 

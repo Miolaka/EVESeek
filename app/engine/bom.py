@@ -17,11 +17,11 @@ _RAW_CATEGORY_IDS = {
     18,   # Drone
 }
 _RAW_GROUP_IDS = {
-    711,  # Moon Materials (raw)
-    423,  # Ice Products
-    426,  # Compressed Ice
-    873,  # Gas Cloud
+    427,  # Moon Materials (Atmospheric Gases, Evaporite Deposits, Tungsten, Platinum, etc.)
+    423,  # Ice Products (Heavy Water, Liquid Ozone, isotopes, Strontium Clathrates)
+    711,  # Harvestable Cloud (gas cloud harvesting: Fullerites, etc.)
 }
+_SHIP_CATEGORY_ID = 6
 
 # Maps material_source → (station_id, is_buy_order)
 _STATION_MAP: dict[str, tuple[int, bool]] = {
@@ -78,6 +78,11 @@ def _is_raw_category(type_row) -> bool:
     return group_row is not None and group_row["categoryID"] in _RAW_CATEGORY_IDS
 
 
+def _is_ship(type_row) -> bool:
+    group_row = sde.get_group(type_row["groupID"])
+    return group_row is not None and group_row["categoryID"] == _SHIP_CATEGORY_ID
+
+
 def _build_node(
     type_id: int,
     quantity: int,
@@ -96,6 +101,7 @@ def _build_node(
     is_raw = (
         group_id in _RAW_GROUP_IDS
         or (type_row and type_row["groupID"] and _is_raw_category(type_row))
+        or (type_row and type_row["groupID"] and depth > 0 and not req.build_t1_hull and _is_ship(type_row))
         or blueprint is None
         or depth >= 10
     )
@@ -120,24 +126,25 @@ def _build_node(
     activity_id = blueprint["activityID"]
     qty_per_run = blueprint["quantity"] or 1
 
+    runs_needed = math.ceil(quantity / qty_per_run)
     max_runs_per_bpc = sde.get_max_production_limit(bp_type_id)
-    bpc_copies_needed = math.ceil(quantity / (max_runs_per_bpc * qty_per_run))
+    bpc_copies_needed = math.ceil(runs_needed / max_runs_per_bpc)
 
     me = req.me_overrides.get(type_id, req.me_level)
     materials = sde.get_activity_materials(bp_type_id, activity_id)
 
     for mat in materials:
         mat_type_id = mat["materialTypeID"]
-        mat_qty = ceil_qty(mat["quantity"], req.runs, me)
+        mat_qty = ceil_qty(mat["quantity"], runs_needed, me, req.structure_bonus)
         child = _build_node(mat_type_id, mat_qty, req, depth + 1)
         children.append(child)
         breakdown = _add_breakdowns(breakdown, child.cost_breakdown)
 
-    # EIV = sum of adjusted prices of input materials × their base quantities
+    # EIV = sum of adjusted prices of input materials × their base quantities × runs
     eiv = sum(
         (esi.get_adjusted_price(m["materialTypeID"]) or Decimal("0")) * m["quantity"]
         for m in materials
-    )
+    ) * runs_needed
     cost_indices = esi.get_system_cost_index(req.system_id)
 
     if activity_id == ACTIVITY_MANUFACTURING:
@@ -146,7 +153,7 @@ def _build_node(
             eiv, ci,
             req.structure_bonus, req.facility_tax,
             req.fw_level,
-        ) * req.runs
+        )
         breakdown.manufacturing_fees += fee
 
     elif activity_id == ACTIVITY_REACTION:
@@ -155,7 +162,7 @@ def _build_node(
             eiv, ci,
             req.structure_bonus, Decimal("0"),
             req.fw_level,
-        ) * req.runs
+        )
         breakdown.reaction_fees += fee
 
     breakdown.logistics_costs += _logistics(volume, quantity, req)

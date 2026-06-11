@@ -7,6 +7,7 @@ exactly for job fees, material efficiency, and market fill prices.
 ## Features
 
 - **Full recursive BOM** with manufacturing + reaction job fees, ME bonus, FW bonus
+- **T1 hull build/buy toggle** — when building a T2 ship, manufacture the T1 hull (default) or price it off market; default is build because buying a packaged hull is impractical to haul
 - **Station-specific fill pricing** — Jita 4-4 or Amarr EFA, sell or buy side, volume-weighted
 - **Compressed ore comparison** — side-by-side direct buy vs buy compressed ore + refine, with logistics-adjusted byproduct credit and true global leftover surplus
 - **Leftover optimisation** — set a max leftover value (ISK) and/or a haul cost (ISK/m³); the engine greedily swaps ore choices to stay within the limit; falls back to direct buy with a note if the constraint is impossible
@@ -57,11 +58,15 @@ Open `http://localhost:8005` — API docs at `http://localhost:8005/docs`.
   "structure_bonus": 0.01,
   "fw_level": 0,
   "facility_tax": 0.0025,
-  "logistics_cost_isk_per_m3": 0
+  "logistics_cost_isk_per_m3": 0,
+  "build_t1_hull": true
 }
 ```
 
 `material_source`: `"jita_sell"` | `"jita_buy"` | `"amarr_sell"` | `"amarr_buy"`
+
+`build_t1_hull`: when building a T2 ship, `true` (default) manufactures the T1 hull
+from minerals; `false` prices it off the market instead.
 
 Returns: `total_cost`, `cost_breakdown` (material / manufacturing / reaction / logistics),
 and a full `bom_tree` with `bpc_copies_needed` and `max_runs_per_bpc` at each node.

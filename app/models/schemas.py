@@ -20,6 +20,7 @@ class BuildCostRequest(BaseModel):
     broker_relations_level: int = Field(0, ge=0, le=5)
     faction_standing: float = Field(0.0, ge=-10.0, le=10.0)
     corp_standing: float = Field(0.0, ge=-10.0, le=10.0)
+    build_t1_hull: bool = True
 
 
 class CostBreakdown(BaseModel):
@@ -71,6 +72,7 @@ class CompareMaterialSourceRequest(BaseModel):
     refinery_bonus: float = Field(0.0, ge=0.0, le=0.10)
     leftover_logistics_isk_per_m3: Decimal = Field(Decimal("0"), ge=0)
     max_leftover_isk: Decimal | None = None
+    build_t1_hull: bool = True
 
 
 class DirectBuyItem(BaseModel):
