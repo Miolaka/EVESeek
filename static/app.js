@@ -29,7 +29,7 @@ function secColor(sec) {
 
 // ── Autocomplete ──────────────────────────────────────────────────────────────
 
-function makeAutocomplete({ inputId, listId, hiddenId, endpoint, labelKey, valueKey, extraLabel }) {
+function makeAutocomplete({ inputId, listId, hiddenId, endpoint, labelKey, valueKey, extraLabel, onSelect }) {
   const input = document.getElementById(inputId);
   const list = document.getElementById(listId);
   const hidden = document.getElementById(hiddenId);
@@ -79,6 +79,7 @@ function makeAutocomplete({ inputId, listId, hiddenId, endpoint, labelKey, value
         input.value = item[labelKey];
         hidden.value = item[valueKey];
         closeList();
+        if (onSelect) onSelect(item);
       });
       list.appendChild(li);
     });
@@ -95,6 +96,7 @@ function makeAutocomplete({ inputId, listId, hiddenId, endpoint, labelKey, value
 makeAutocomplete({
   inputId: 'item-search', listId: 'item-list', hiddenId: 'item-id',
   endpoint: 'search', labelKey: 'name', valueKey: 'type_id',
+  onSelect: () => { bpoMeOverrides = {}; document.getElementById('bpo-section').style.display = 'none'; },
 });
 
 makeAutocomplete({
@@ -102,6 +104,10 @@ makeAutocomplete({
   endpoint: 'search-systems', labelKey: 'name', valueKey: 'system_id',
   extraLabel: item => item.security != null ? item.security.toFixed(1) : '',
 });
+
+// ── Per-BPO ME overrides (persists across recalculates, resets on item change) ─
+let bpoMeOverrides = {};
+let lastBuiltTypeId = null;
 
 // ── BPC tree walker ───────────────────────────────────────────────────────────
 
@@ -194,10 +200,23 @@ async function calculate() {
     me_level: parseInt(document.getElementById('me-level').value),
     fw_level: parseInt(document.getElementById('fw-level').value),
     material_source: document.getElementById('material-source').value,
-    structure_bonus: parseFloat(document.getElementById('structure-bonus').value),
+    structure_bonus: 0.01,
     logistics_cost_isk_per_m3: parseFloat(document.getElementById('logistics').value) || 0,
     build_t1_hull: document.getElementById('build-t1-hull').checked,
   };
+
+  const cfg = loadConfig();
+  const activityMeBonus = computeActivityMeBonus(cfg);
+  body.activity_me_bonus = activityMeBonus;
+
+  const parsedTypeId = parseInt(typeId);
+  if (parsedTypeId !== lastBuiltTypeId) {
+    bpoMeOverrides = {};
+    lastBuiltTypeId = parsedTypeId;
+  }
+  if (Object.keys(bpoMeOverrides).length > 0) {
+    body.me_overrides = bpoMeOverrides;
+  }
 
   // Compare-specific fields
   const compareBody = { ...body };
@@ -230,6 +249,7 @@ async function calculate() {
     const compare = compareRes.ok ? await compareRes.json() : null;
 
     renderBuild(build, compare);
+    renderBpoList(build.bpo_list || []);
     if (compare) renderCompare(compare);
 
     document.getElementById('results').style.display = 'block';
@@ -340,6 +360,37 @@ function renderBuild(data, compareData) {
   for (const node of data.bom_tree) {
     bomTree.appendChild(renderBOMNode(node, false));
   }
+}
+
+function renderBpoList(bpoList) {
+  const section = document.getElementById('bpo-section');
+  const tbody = document.getElementById('bpo-body');
+  if (!bpoList || bpoList.length === 0) { section.style.display = 'none'; return; }
+
+  tbody.innerHTML = '';
+  bpoList.forEach(bpo => {
+    const isReaction = bpo.activity_id === 11;
+    const tr = document.createElement('tr');
+    const actLabel = isReaction ? '<span class="muted">Reaction</span>' : 'Manufacturing';
+    const rootNote = bpo.is_root ? ' <span class="muted">(hull)</span>' : '';
+    const disabled = isReaction || bpo.is_root ? 'disabled style="opacity:0.4"' : '';
+    tr.innerHTML = `
+      <td>${bpo.name}${rootNote}</td>
+      <td>${actLabel}</td>
+      <td class="num">
+        <input type="number" class="me-input" min="0" max="10" value="${bpo.me_level}"
+          data-type-id="${bpo.type_id}" ${disabled}>
+      </td>`;
+    tbody.appendChild(tr);
+
+    if (!isReaction && !bpo.is_root) {
+      tr.querySelector('.me-input').addEventListener('change', e => {
+        bpoMeOverrides[bpo.type_id] = parseInt(e.target.value);
+      });
+    }
+  });
+
+  section.style.display = 'block';
 }
 
 function renderCompare(data) {
@@ -610,6 +661,399 @@ function clearError() {
   const box = document.getElementById('error-box');
   box.textContent = '';
   box.style.display = 'none';
+}
+
+// ── Structure config data ─────────────────────────────────────────────────
+
+const STRUCTURE_TYPES = [
+  { id: 'npc',     name: 'NPC Station',  rig_size: 0, base_me_mfg: 0.0, base_me_react: 0.0 },
+  { id: 'raitaru', name: 'Raitaru',      rig_size: 2, base_me_mfg: 1.0, base_me_react: 0.0 },
+  { id: 'azbel',   name: 'Azbel',        rig_size: 3, base_me_mfg: 1.0, base_me_react: 0.0 },
+  { id: 'sotiyo',  name: 'Sotiyo',       rig_size: 4, base_me_mfg: 1.0, base_me_react: 0.0 },
+  { id: 'athanor', name: 'Athanor',      rig_size: 2, base_me_mfg: 0.0, base_me_react: 0.0 },
+  { id: 'tatara',  name: 'Tatara',       rig_size: 3, base_me_mfg: 0.0, base_me_react: 0.0 },
+];
+
+const ACTIVITY_SLOTS = [
+  { key: 'basic_small_ship',  label: 'Small Ships' },
+  { key: 'basic_med_ship',    label: 'Medium Ships' },
+  { key: 'basic_large_ship',  label: 'Large Ships' },
+  { key: 'adv_small_ship',    label: 'Advanced Small Ships' },
+  { key: 'adv_med_ship',      label: 'Advanced Medium Ships' },
+  { key: 'adv_large_ship',    label: 'Advanced Large Ships' },
+  { key: 'cap_ship',          label: 'Capital Ships' },
+  { key: 'cap_comp',          label: 'Capital Components' },
+  { key: 'cap_adv_comp',      label: 'Capital Advanced Components' },
+  { key: 'adv_comp',          label: 'Advanced Components' },
+  { key: 'equipment',         label: 'Modules and Equipment' },
+  { key: 'ammo',              label: 'Ammo and Charges' },
+  { key: 'drones',            label: 'Drones and Fighters' },
+  { key: 'fuel_blocks',       label: 'Fuel Blocks' },
+  { key: 'comp_react',        label: 'Composite Reactions' },
+  { key: 'hyb_react',         label: 'Hybrid Reactions' },
+  { key: 'bio_react',         label: 'Bio and Gas-Phase Reactions' },
+];
+
+// Slots that are reactions (used for base_me_react vs base_me_mfg)
+const REACTION_SLOTS = new Set(['comp_react', 'hyb_react', 'bio_react']);
+
+let _rigData = null;
+
+// Pre-load rig data at startup so structure bonuses apply without opening the modal
+(async () => {
+  try {
+    const res = await fetch('/api/v1/config/rigs');
+    let data = await res.json();
+    _rigData = data.filter(r => r.base_me_pct > 0 && !r.name.includes('Thukker'));
+  } catch (e) {
+    console.error('Failed to pre-load rig data', e);
+    _rigData = [];
+  }
+})();
+
+// Map rig name → list of activity slots it applies to
+function rigActivitySlots(name) {
+  if (name.includes('XL-Set Ship Manufacturing'))
+    return ['basic_small_ship','basic_med_ship','basic_large_ship',
+            'adv_small_ship','adv_med_ship','adv_large_ship','cap_ship'];
+  if (name.includes('XL-Set Equipment and Consumable'))
+    return ['equipment','ammo'];
+  if (name.includes('XL-Set Structure and Component'))
+    return ['structure','cap_comp','cap_adv_comp','adv_comp'];
+  if (name.includes('Reactor Efficiency'))           // L-Set covers all reactions
+    return ['comp_react','hyb_react','bio_react'];
+  if (name.includes('Composite Reactor'))            return ['comp_react'];
+  if (name.includes('Hybrid Reactor'))               return ['hyb_react'];
+  if (name.includes('Biochemical Reactor'))          return ['bio_react'];
+  if (name.includes('Basic Small Ship'))             return ['basic_small_ship'];
+  if (name.includes('Basic Medium Ship'))            return ['basic_med_ship'];
+  if (name.includes('Basic Large Ship'))             return ['basic_large_ship'];
+  if (name.includes('Advanced Small Ship'))          return ['adv_small_ship'];
+  if (name.includes('Advanced Medium Ship'))         return ['adv_med_ship'];
+  if (name.includes('Advanced Large Ship'))          return ['adv_large_ship'];
+  if (name.includes('Capital Ship'))                 return ['cap_ship'];
+  if (name.includes('Advanced Component'))           return ['adv_comp','cap_adv_comp'];
+  if (name.includes('Basic Capital Component'))      return ['cap_comp'];
+  if (name.includes('Drone and Fighter'))            return ['drones'];
+  if (/Ammunition|Ammo/.test(name))                 return ['ammo'];
+  if (name.includes('Equipment') && !name.includes('Consumable')) return ['equipment'];
+  if (name.includes('Structure'))                    return ['structure'];
+  return [];
+}
+
+// ── Config state management (localStorage) ───────────────────────────────────
+
+function defaultConfig() {
+  return {
+    structures: [
+      { id: 's1', name: 'ec',      type: 'sotiyo',  security: 'null', rigs: [null, null, null] },
+      { id: 's2', name: 'refinery',type: 'tatara',  security: 'null', rigs: [null, null, null] },
+    ],
+    assignments: {
+      basic_small_ship: 's1', basic_med_ship: 's1', basic_large_ship: 's1',
+      adv_small_ship:   's1', adv_med_ship:   's1', adv_large_ship:  's1',
+      cap_ship: 's1', cap_comp: 's1', cap_adv_comp: 's1',
+      adv_comp: 's1', equipment: 's1', ammo: 's1', drones: 's1', fuel_blocks: 's1',
+      comp_react: 's2', hyb_react: 's2', bio_react: 's2',
+    },
+  };
+}
+
+function loadConfig() {
+  try {
+    const raw = localStorage.getItem('eveseek_structure_config');
+    return raw ? JSON.parse(raw) : defaultConfig();
+  } catch { return defaultConfig(); }
+}
+
+function saveConfigToStorage(cfg) {
+  localStorage.setItem('eveseek_structure_config', JSON.stringify(cfg));
+}
+
+// Compute effective ME bonus (as fraction 0-1) per activity slot from config
+function computeActivityMeBonus(cfg) {
+  const bonuses = {};
+  for (const slot of ACTIVITY_SLOTS) {
+    const structId = cfg.assignments[slot.key];
+    const struct   = cfg.structures.find(s => s.id === structId);
+    if (!struct) { bonuses[slot.key] = 0; continue; }
+
+    const stype    = STRUCTURE_TYPES.find(t => t.id === struct.type) || STRUCTURE_TYPES[0];
+    const isReact  = REACTION_SLOTS.has(slot.key);
+    let total      = (isReact ? stype.base_me_react : stype.base_me_mfg) / 100;
+
+    if (_rigData) {
+      for (const rigTypeId of struct.rigs) {
+        if (!rigTypeId) continue;
+        const rig = _rigData.find(r => r.type_id === rigTypeId);
+        if (!rig) continue;
+        const slots = rigActivitySlots(rig.name);
+        if (!slots.includes(slot.key)) continue;
+        const secMult = struct.security === 'hi' ? rig.hi_mult
+                      : struct.security === 'lo' ? rig.lo_mult
+                      : rig.nu_mult;
+        total += rig.base_me_pct / 100 * secMult;
+      }
+    }
+    bonuses[slot.key] = total;
+  }
+  return bonuses;
+}
+
+// ── Modal open/close ──────────────────────────────────────────────────────────
+
+async function openConfig() {
+  // _rigData is pre-loaded at startup; wait briefly if still loading
+  if (!_rigData) {
+    await new Promise(r => setTimeout(r, 500));
+  }
+  _configDraft = JSON.parse(JSON.stringify(loadConfig()));
+  renderConfigModal(_configDraft);
+  document.getElementById('config-overlay').style.display = 'flex';
+}
+
+function closeConfig() {
+  document.getElementById('config-overlay').style.display = 'none';
+}
+
+function closeConfigOnOverlay(e) {
+  if (e.target === document.getElementById('config-overlay')) closeConfig();
+}
+
+let _configDraft = null;
+
+function saveConfig() {
+  saveConfigToStorage(_configDraft);
+  closeConfig();
+}
+
+function resetConfig() {
+  _configDraft = defaultConfig();
+  renderConfigModal(_configDraft);
+}
+
+// ── Modal rendering ───────────────────────────────────────────────────────────
+
+function renderConfigModal(cfg) {
+  renderStructures(cfg);
+  renderAssignments(cfg);
+}
+
+function renderStructures(cfg) {
+  const container = document.getElementById('config-structures');
+  container.innerHTML = '';
+  for (const struct of cfg.structures) {
+    container.appendChild(buildStructCard(struct, cfg));
+  }
+}
+
+function buildStructCard(struct, cfg) {
+  const stype = STRUCTURE_TYPES.find(t => t.id === struct.type) || STRUCTURE_TYPES[3];
+  const rigSize = stype.rig_size;
+
+  // Filter rigs compatible with this structure's rig size
+  const compatRigs = _rigData
+    ? _rigData.filter(r => r.rig_size === rigSize)
+    : [];
+
+  const card = document.createElement('div');
+  card.className = 'struct-card';
+  card.dataset.structId = struct.id;
+
+  // Header: name input + remove button
+  const hdr = document.createElement('div');
+  hdr.className = 'struct-card-header';
+
+  const nameInput = document.createElement('input');
+  nameInput.type = 'text';
+  nameInput.className = 'struct-name-input';
+  nameInput.value = struct.name;
+  nameInput.addEventListener('input', () => {
+    struct.name = nameInput.value;
+    refreshAssignmentDropdowns(cfg);
+  });
+
+  const removeBtn = document.createElement('button');
+  removeBtn.className = 'btn-remove-struct';
+  removeBtn.textContent = '✕';
+  removeBtn.onclick = () => {
+    cfg.structures = cfg.structures.filter(s => s.id !== struct.id);
+    // Clear assignments that used this structure
+    for (const k of Object.keys(cfg.assignments)) {
+      if (cfg.assignments[k] === struct.id) cfg.assignments[k] = cfg.structures[0]?.id || '';
+    }
+    renderConfigModal(cfg);
+  };
+
+  hdr.appendChild(nameInput);
+  hdr.appendChild(removeBtn);
+  card.appendChild(hdr);
+
+  // Type + security row
+  const typeRow = document.createElement('div');
+  typeRow.className = 'struct-row';
+
+  const typeSelect = document.createElement('select');
+  typeSelect.className = 'struct-select';
+  for (const st of STRUCTURE_TYPES) {
+    const opt = document.createElement('option');
+    opt.value = st.id;
+    opt.textContent = st.name;
+    if (st.id === struct.type) opt.selected = true;
+    typeSelect.appendChild(opt);
+  }
+  typeSelect.addEventListener('change', () => {
+    struct.type = typeSelect.value;
+    struct.rigs = [null, null, null];  // reset rigs on structure type change
+    renderStructures(cfg);
+  });
+
+  const secLabel = document.createElement('span');
+  secLabel.className = 'struct-row';
+  secLabel.style.cssText = 'font-size:12px;color:#7a8a7a;text-align:center';
+  secLabel.textContent = 'Security:';
+
+  const secSelect = document.createElement('select');
+  secSelect.className = 'struct-select';
+  [['hi','Highsec'],['lo','Lowsec'],['null','Null / WH']].forEach(([v, l]) => {
+    const opt = document.createElement('option');
+    opt.value = v; opt.textContent = l;
+    if (v === struct.security) opt.selected = true;
+    secSelect.appendChild(opt);
+  });
+  secSelect.addEventListener('change', () => { struct.security = secSelect.value; });
+
+  typeRow.appendChild(typeSelect);
+  typeRow.appendChild(secLabel);
+  typeRow.appendChild(secSelect);
+  card.appendChild(typeRow);
+
+  // Rig slots
+  for (let i = 0; i < 3; i++) {
+    const rigRow = document.createElement('div');
+    rigRow.className = 'struct-rig-row';
+
+    const rigLabel = document.createElement('span');
+    rigLabel.className = 'struct-rig-label';
+    rigLabel.textContent = `Rig ${i + 1}`;
+
+    const rigSelect = document.createElement('select');
+    rigSelect.className = 'struct-rig-select';
+
+    const noRig = document.createElement('option');
+    noRig.value = ''; noRig.textContent = 'No Rig';
+    rigSelect.appendChild(noRig);
+
+    for (const rig of compatRigs) {
+      const opt = document.createElement('option');
+      opt.value = rig.type_id;
+      // Format: "XL-Set Ship Mfg I  (null: 4.2%)"
+      const nuEff = (rig.base_me_pct / 100 * rig.nu_mult * 100).toFixed(1);
+      opt.textContent = `${rig.name}  (null: ${nuEff}%)`;
+      if (rig.type_id === struct.rigs[i]) opt.selected = true;
+      rigSelect.appendChild(opt);
+    }
+
+    rigSelect.addEventListener('change', () => {
+      struct.rigs[i] = rigSelect.value ? parseInt(rigSelect.value) : null;
+    });
+
+    rigRow.appendChild(rigLabel);
+    rigRow.appendChild(rigSelect);
+    card.appendChild(rigRow);
+  }
+
+  return card;
+}
+
+function renderAssignments(cfg) {
+  const container = document.getElementById('config-assignments');
+  container.innerHTML = '';
+
+  for (const slot of ACTIVITY_SLOTS) {
+    const row = document.createElement('div');
+    row.className = 'assign-row';
+
+    const label = document.createElement('span');
+    label.className = 'assign-label';
+    label.textContent = slot.label;
+
+    const sel = document.createElement('select');
+    sel.className = 'assign-select';
+    sel.dataset.slot = slot.key;
+
+    for (const struct of cfg.structures) {
+      const opt = document.createElement('option');
+      opt.value = struct.id;
+      opt.textContent = struct.name || struct.id;
+      if (cfg.assignments[slot.key] === struct.id) opt.selected = true;
+      sel.appendChild(opt);
+    }
+    sel.addEventListener('change', () => {
+      cfg.assignments[slot.key] = sel.value;
+    });
+
+    row.appendChild(label);
+    row.appendChild(sel);
+    container.appendChild(row);
+  }
+}
+
+function refreshAssignmentDropdowns(cfg) {
+  const container = document.getElementById('config-assignments');
+  if (!container) return;
+  const selects = container.querySelectorAll('select.assign-select');
+  for (const sel of selects) {
+    const current = cfg.assignments[sel.dataset.slot];
+    sel.innerHTML = '';
+    for (const struct of cfg.structures) {
+      const opt = document.createElement('option');
+      opt.value = struct.id;
+      opt.textContent = struct.name || struct.id;
+      if (struct.id === current) opt.selected = true;
+      sel.appendChild(opt);
+    }
+  }
+}
+
+function addStructure() {
+  const id = 's' + Date.now();
+  _configDraft.structures.push({
+    id, name: 'Structure ' + _configDraft.structures.length,
+    type: 'sotiyo', security: 'null', rigs: [null, null, null],
+  });
+  renderConfigModal(_configDraft);
+}
+
+function autoAssign() {
+  if (!_rigData || !_configDraft) return;
+
+  for (const slot of ACTIVITY_SLOTS) {
+    let bestId    = _configDraft.structures[0]?.id || '';
+    let bestBonus = -Infinity;
+
+    for (const struct of _configDraft.structures) {
+      const stype = STRUCTURE_TYPES.find(t => t.id === struct.type);
+      const isR   = REACTION_SLOTS.has(slot.key);
+      let bonus   = stype ? (isR ? stype.base_me_react : stype.base_me_mfg) / 100 : 0;
+
+      for (const rigId of struct.rigs) {
+        if (!rigId) continue;
+        const rig = _rigData.find(r => r.type_id === rigId);
+        if (!rig) continue;
+        if (!rigActivitySlots(rig.name).includes(slot.key)) continue;
+        const sm = struct.security === 'hi' ? rig.hi_mult
+                 : struct.security === 'lo' ? rig.lo_mult : rig.nu_mult;
+        bonus += rig.base_me_pct / 100 * sm;
+      }
+
+      if (bonus > bestBonus) { bestBonus = bonus; bestId = struct.id; }
+    }
+
+    _configDraft.assignments[slot.key] = bestId;
+  }
+
+  renderAssignments(_configDraft);
 }
 
 // Enter key on inputs triggers calculate

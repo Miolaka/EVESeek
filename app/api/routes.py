@@ -5,6 +5,7 @@ from app.models.schemas import (
     CompareMaterialSourceRequest, CompareMaterialSourceResponse,
 )
 from app.data import sde
+from app.data.rigs import get_standup_me_rigs
 from app.engine.bom import build_cost as _build_cost
 from app.engine.refining import refine_cost as _refine_cost
 from app.engine.compare import compare_material_source as _compare
@@ -34,6 +35,23 @@ async def compare_material_source(req: CompareMaterialSourceRequest):
         return _compare(req)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/config/rigs")
+def config_rigs():
+    return get_standup_me_rigs()
+
+
+@router.get("/config/structures")
+def config_structures():
+    return [
+        {"id": "npc",     "name": "NPC Station",  "rig_size": 0, "base_me_mfg": 0.0, "base_me_react": 0.0},
+        {"id": "raitaru", "name": "Raitaru",       "rig_size": 2, "base_me_mfg": 1.0, "base_me_react": 0.0},
+        {"id": "azbel",   "name": "Azbel",         "rig_size": 3, "base_me_mfg": 1.0, "base_me_react": 0.0},
+        {"id": "sotiyo",  "name": "Sotiyo",        "rig_size": 4, "base_me_mfg": 1.0, "base_me_react": 0.0},
+        {"id": "athanor", "name": "Athanor",       "rig_size": 2, "base_me_mfg": 0.0, "base_me_react": 0.0},
+        {"id": "tatara",  "name": "Tatara",        "rig_size": 3, "base_me_mfg": 0.0, "base_me_react": 0.0},
+    ]
 
 
 @router.get("/search")

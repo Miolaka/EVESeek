@@ -3,9 +3,8 @@ from decimal import Decimal
 
 
 def ceil_qty(base_qty: int, runs: int, me_level: int, structure_bonus: float = 0.0) -> int:
-    """Apply ME + structure reduction per run, then multiply by run count."""
-    per_run = max(1, math.ceil(base_qty * (1 - me_level * 0.01) * (1 - structure_bonus)))
-    return per_run * runs
+    """EVE batch formula: max(runs, ceil(base × runs × me_factor × sb_factor))."""
+    return max(runs, math.ceil(base_qty * runs * (1 - me_level * 0.01) * (1 - structure_bonus)))
 
 
 def broker_fee_rate(

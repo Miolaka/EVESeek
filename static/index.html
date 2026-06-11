@@ -10,6 +10,7 @@
   <header>
     <h1>EVESeek</h1>
     <span>Manufacturing Cost Calculator</span>
+    <button class="btn-config" onclick="openConfig()">⚙ Structures</button>
   </header>
 
   <main>
@@ -65,28 +66,19 @@
           </div>
         </div>
 
-        <!-- Row 3: Logistics / Structure / Calculate -->
+        <!-- Row 3: Logistics / Build T1 hull / Calculate -->
         <div class="form-row">
           <div class="form-group" style="max-width:160px">
             <label>Logistics (ISK/m³)</label>
             <input id="logistics" type="number" value="0" min="0" step="100">
           </div>
-          <div class="form-group" style="max-width:160px">
-            <label>Structure bonus</label>
-            <select id="structure-bonus">
-              <option value="0.01">EC — no rig (1%)</option>
-              <option value="0.04">EC + T1 rig (4%)</option>
-              <option value="0.055">EC + T2 rig (5.5%)</option>
-            </select>
-          </div>
-          <div class="form-group" style="align-self:flex-end;padding-bottom:6px">
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;white-space:nowrap">
+          <div style="flex:none;align-self:flex-end;padding-bottom:6px">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;white-space:nowrap;color:var(--text-muted);font-size:13px">
               <input id="build-t1-hull" type="checkbox" checked>
               Build T1 hull
             </label>
           </div>
-          <div class="form-group" style="justify-content:flex-end">
-            <label>&nbsp;</label>
+          <div style="flex:none;margin-left:auto;align-self:flex-end">
             <button class="btn" id="calc-btn" onclick="calculate()">Calculate</button>
           </div>
         </div>
@@ -161,6 +153,23 @@
 
       <hr class="divider">
 
+      <!-- BPO ME levels -->
+      <div class="section" id="bpo-section" style="display:none">
+        <div class="section-title">BPO Research Levels</div>
+        <table id="bpo-table">
+          <thead>
+            <tr>
+              <th>Blueprint</th>
+              <th>Activity</th>
+              <th class="num" style="width:90px">ME</th>
+            </tr>
+          </thead>
+          <tbody id="bpo-body"></tbody>
+        </table>
+      </div>
+
+      <hr class="divider">
+
       <!-- Source comparison -->
       <div class="section" id="compare-section" style="display:none">
         <div class="section-title">Material source comparison</div>
@@ -214,6 +223,37 @@
     </div>
   </main>
 
-  <script src="/app.js?v=9"></script>
+  <div id="config-overlay" class="config-overlay" style="display:none" onclick="closeConfigOnOverlay(event)">
+    <div class="config-modal">
+      <div class="config-header">
+        <span class="config-title">Structure Configuration</span>
+        <button class="config-close" onclick="closeConfig()">✕</button>
+      </div>
+      <div class="config-body">
+        <!-- Left: structure definitions -->
+        <div class="config-panel">
+          <div class="config-panel-title">Your Structures</div>
+          <div class="config-struct-actions">
+            <button class="btn" onclick="addStructure()">+ Add Structure</button>
+            <button class="btn btn-secondary" onclick="resetConfig()">Reset</button>
+          </div>
+          <div id="config-structures"></div>
+        </div>
+        <!-- Right: activity assignments -->
+        <div class="config-panel config-panel-right">
+          <div class="config-panel-title">
+            Build Where?
+            <button class="btn-auto" onclick="autoAssign()">Auto</button>
+          </div>
+          <div id="config-assignments"></div>
+        </div>
+      </div>
+      <div class="config-footer">
+        <button class="btn" onclick="saveConfig()">Save &amp; Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js?v=12"></script>
 </body>
 </html>

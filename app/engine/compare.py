@@ -4,7 +4,7 @@ from decimal import Decimal
 from app.data import sde
 from app.esi import client as esi
 from app.core.utils import job_cost_refining, broker_fee_rate
-from app.engine.bom import build_cost, _STATION_MAP
+from app.engine.bom import build_cost, _compute_flat_bom, _STATION_MAP
 from app.models.schemas import (
     BuildCostRequest,
     BOMNode,
@@ -170,24 +170,27 @@ def _compute_global_leftover(
     leaves: dict[int, tuple[str, int]],
     leftover_logistics_isk_per_m3: Decimal,
     reprocessing_yield: float,
+    ore_portion: dict[int, int],
+    ore_outputs: dict[int, list],
+    item_meta: dict[int, tuple[str, Decimal]],
 ) -> tuple[list[LeftoverItem], Decimal, Decimal, Decimal]:
     """Compute true global leftover across all chosen ores.
 
+    ore_portion, ore_outputs, item_meta are pre-computed SDE lookups — pass them in so
+    this function does no SQLite I/O and can be called thousands of times in the swap loop.
+
     Returns (leftover_items, leftover_total_isk, leftover_logistics_isk, leftover_net_isk).
-    leftover_net_isk is the actual cash received after paying to haul leftovers to Jita.
     """
     total_produced: dict[int, tuple[str, int]] = {}
     for ore_item in ore_items:
-        ore_type_row = sde.get_type(ore_item.ore_type_id)
-        portion_size = int(ore_type_row["portionSize"]) if ore_type_row and ore_type_row["portionSize"] else 100
+        portion_size = ore_portion.get(ore_item.ore_type_id, 100)
         batches = ore_item.quantity // portion_size
-        for output in sde.get_refining_outputs(ore_item.ore_type_id):
+        for output in ore_outputs.get(ore_item.ore_type_id, []):
             out_id = output["materialTypeID"]
             output_qty = math.floor(output["quantity"] * reprocessing_yield) * batches
             if output_qty <= 0:
                 continue
-            mat_row = sde.get_type(out_id)
-            mat_name = mat_row["typeName"] if mat_row else f"Unknown ({out_id})"
+            mat_name, _ = item_meta.get(out_id, (f"Unknown ({out_id})", Decimal("0")))
             _, prev = total_produced.get(out_id, (mat_name, 0))
             total_produced[out_id] = (mat_name, prev + output_qty)
 
@@ -205,8 +208,7 @@ def _compute_global_leftover(
             _JITA_REGION_ID, type_id, _JITA_STATION_ID, surplus, True
         ) or Decimal("0")
 
-        mat_row = sde.get_type(type_id)
-        vol_per_unit = Decimal(str(mat_row["volume"])) if mat_row and mat_row["volume"] else Decimal("0")
+        _, vol_per_unit = item_meta.get(type_id, ("", Decimal("0")))
         total_vol = vol_per_unit * surplus
         logistics_isk = total_vol * leftover_logistics_isk_per_m3
         gross_isk = buy_price * surplus
@@ -245,15 +247,18 @@ def compare_material_source(req: CompareMaterialSourceRequest) -> CompareMateria
         broker_relations_level=req.broker_relations_level,
         faction_standing=req.faction_standing,
         corp_standing=req.corp_standing,
+        activity_me_bonus=req.activity_me_bonus,
     )
     bom_result = build_cost(bom_req)
 
     station_id, is_buy = _STATION_MAP[req.material_source]
     region_id = esi.STATION_REGION[station_id]
 
+    flat_bom = _compute_flat_bom(bom_req.type_id, bom_req.runs, bom_req)
     leaves: dict[int, tuple[str, int]] = {}
-    for node in bom_result.bom_tree:
-        _collect_leaves(node, leaves)
+    for tid, qty in flat_bom.items():
+        row = sde.get_type(tid)
+        leaves[tid] = (row["typeName"] if row else f"Unknown ({tid})", qty)
 
     _prefetch_ore_orders(set(leaves.keys()), region_id)
 
@@ -295,6 +300,28 @@ def compare_material_source(req: CompareMaterialSourceRequest) -> CompareMateria
                 volume_m3=vol * qty,
             ))
 
+    # Pre-compute SDE data needed by _compute_global_leftover once, so the swap loop
+    # does zero SQLite I/O across potentially thousands of calls.
+    all_ore_ids: set[int] = {
+        c.ore_type_id for cands in all_candidates.values() for c in cands
+    }
+    ore_portion: dict[int, int] = {}
+    ore_outputs: dict[int, list] = {}
+    for oid in all_ore_ids:
+        row = sde.get_type(oid)
+        ore_portion[oid] = int(row["portionSize"]) if row and row["portionSize"] else 100
+        ore_outputs[oid] = list(sde.get_refining_outputs(oid))
+
+    item_meta: dict[int, tuple[str, Decimal]] = {}
+    for outputs in ore_outputs.values():
+        for out in outputs:
+            tid = out["materialTypeID"]
+            if tid not in item_meta:
+                row = sde.get_type(tid)
+                name = row["typeName"] if row else f"Unknown ({tid})"
+                vol = Decimal(str(row["volume"])) if row and row["volume"] else Decimal("0")
+                item_meta[tid] = (name, vol)
+
     # Pass 1: cheapest ore per mineral (logistics-adjusted effective_isk)
     ore_by_mineral: dict[int, CompressedOreItem] = {
         tid: cands[0] for tid, cands in all_candidates.items()
@@ -302,7 +329,10 @@ def compare_material_source(req: CompareMaterialSourceRequest) -> CompareMateria
     ore_items: list[CompressedOreItem] = list(ore_by_mineral.values())
 
     leftover_items, leftover_total_isk, leftover_logistics_isk, leftover_net_isk = (
-        _compute_global_leftover(ore_items, leaves, req.leftover_logistics_isk_per_m3, req.reprocessing_yield)
+        _compute_global_leftover(
+            ore_items, leaves, req.leftover_logistics_isk_per_m3, req.reprocessing_yield,
+            ore_portion, ore_outputs, item_meta,
+        )
     )
 
     # Pass 2: if max_leftover_isk is set and exceeded, greedily swap ore choices to reduce
@@ -331,7 +361,8 @@ def compare_material_source(req: CompareMaterialSourceRequest) -> CompareMateria
                         for item in ore_items
                     ]
                     _, _, _, test_net = _compute_global_leftover(
-                        test_items, leaves, req.leftover_logistics_isk_per_m3, req.reprocessing_yield
+                        test_items, leaves, req.leftover_logistics_isk_per_m3, req.reprocessing_yield,
+                        ore_portion, ore_outputs, item_meta,
                     )
                     reduction = leftover_net_isk - test_net
 
@@ -346,7 +377,10 @@ def compare_material_source(req: CompareMaterialSourceRequest) -> CompareMateria
             ore_by_mineral[best_mineral_tid] = best_new_ore
             ore_items = [ore_by_mineral[tid] for tid in all_candidates]
             leftover_items, leftover_total_isk, leftover_logistics_isk, leftover_net_isk = (
-                _compute_global_leftover(ore_items, leaves, req.leftover_logistics_isk_per_m3, req.reprocessing_yield)
+                _compute_global_leftover(
+                    ore_items, leaves, req.leftover_logistics_isk_per_m3, req.reprocessing_yield,
+                    ore_portion, ore_outputs, item_meta,
+                )
             )
 
     direct_total_isk = sum((i.total_isk for i in direct_items), Decimal("0"))

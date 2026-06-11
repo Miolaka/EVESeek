@@ -21,6 +21,7 @@ class BuildCostRequest(BaseModel):
     faction_standing: float = Field(0.0, ge=-10.0, le=10.0)
     corp_standing: float = Field(0.0, ge=-10.0, le=10.0)
     build_t1_hull: bool = True
+    activity_me_bonus: dict[str, float] = Field(default_factory=dict)
 
 
 class CostBreakdown(BaseModel):
@@ -43,12 +44,21 @@ class BOMNode(BaseModel):
     max_runs_per_bpc: int = 0
 
 
+class BPOInfo(BaseModel):
+    type_id: int
+    name: str
+    activity_id: int   # 1 = manufacturing, 11 = reaction
+    me_level: int
+    is_root: bool = False
+
+
 class BuildCostResponse(BaseModel):
     type_id: int
     item_name: str
     total_cost: ISK
     cost_breakdown: CostBreakdown
     bom_tree: list[BOMNode]
+    bpo_list: list[BPOInfo] = Field(default_factory=list)
 
 
 BOMNode.model_rebuild()
@@ -73,6 +83,7 @@ class CompareMaterialSourceRequest(BaseModel):
     leftover_logistics_isk_per_m3: Decimal = Field(Decimal("0"), ge=0)
     max_leftover_isk: Decimal | None = None
     build_t1_hull: bool = True
+    activity_me_bonus: dict[str, float] = Field(default_factory=dict)
 
 
 class DirectBuyItem(BaseModel):
