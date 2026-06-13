@@ -111,7 +111,8 @@ let lastBuiltTypeId = null;
 
 // ── BPC section ───────────────────────────────────────────────────────────────
 
-let _userBpcCosts = {};   // type_id → user-entered ISK for non-copyable BPCs
+let _userBpcCosts = {};     // type_id → user-entered ISK for non-copyable BPCs
+let _bpoToggled = new Set(); // type_ids the user has marked as "own BPO"
 
 function renderBpcList(bpoList, bpcTotalCalc) {
   const tbody = document.getElementById('bpc-body');
@@ -120,26 +121,28 @@ function renderBpcList(bpoList, bpcTotalCalc) {
   tfoot.innerHTML = '';
   if (!bpoList || !bpoList.length) return;
 
-  let calcTotal = bpcTotalCalc || 0;
-  let hasUserInput = false;
-
   for (const b of bpoList) {
     const isReact = b.activity_id === 11;
+    const isBpo = _bpoToggled.has(b.type_id);
+
     const actLabel = isReact
       ? '<span class="muted">Reaction</span>'
       : b.is_root ? 'Manufacturing <span class="muted">(hull)</span>' : 'Manufacturing';
 
-    let costCell;
-    if (isReact) {
-      costCell = '<span class="muted">BPO</span>';
+    // Reactions keep the static "BPO" label — no toggle
+    const toggleHtml = isReact ? '' :
+      `<button class="bpc-toggle ${isBpo ? 'is-bpo' : 'is-bpc'}"
+        data-type-id="${b.type_id}">${isBpo ? 'BPO' : 'BPC'}</button>`;
+
+    let costContent;
+    if (isReact || isBpo) {
+      costContent = '<span class="muted">BPO</span>';
     } else if (!b.is_copyable) {
-      hasUserInput = true;
       const saved = _userBpcCosts[b.type_id] || '';
-      costCell = `<input type="number" class="bpc-cost-input" min="0" step="1000000"
-        placeholder="Enter cost…" value="${saved}"
-        data-type-id="${b.type_id}">`;
+      costContent = `<input type="number" class="bpc-cost-input" min="0" step="1000000"
+        placeholder="Enter cost…" value="${saved}" data-type-id="${b.type_id}">`;
     } else {
-      costCell = `<span class="isk">${fmtISK(b.copy_cost)}</span>`;
+      costContent = `<span class="isk">${fmtISK(b.copy_cost)}</span>`;
     }
 
     const tr = document.createElement('tr');
@@ -149,13 +152,20 @@ function renderBpcList(bpoList, bpcTotalCalc) {
       <td class="num">${fmtNum(b.total_runs)}</td>
       <td class="num">${fmtNum(b.copies_needed)}</td>
       <td class="num muted">${fmtNum(b.runs_per_copy)}</td>
-      <td class="num">${costCell}</td>`;
+      <td class="num bpc-cost-cell">${toggleHtml}${costContent}</td>`;
     tbody.appendChild(tr);
 
-    if (!b.is_copyable && !isReact) {
+    if (!isReact) {
+      tr.querySelector('.bpc-toggle').addEventListener('click', () => {
+        if (_bpoToggled.has(b.type_id)) _bpoToggled.delete(b.type_id);
+        else _bpoToggled.add(b.type_id);
+        renderBpcList(bpoList, bpcTotalCalc);
+      });
+    }
+
+    if (!b.is_copyable && !isReact && !isBpo) {
       tr.querySelector('.bpc-cost-input').addEventListener('input', e => {
-        const v = parseFloat(e.target.value) || 0;
-        _userBpcCosts[b.type_id] = v;
+        _userBpcCosts[b.type_id] = parseFloat(e.target.value) || 0;
         _refreshBpcTotal(bpoList, bpcTotalCalc);
       });
     }
@@ -166,13 +176,17 @@ function renderBpcList(bpoList, bpcTotalCalc) {
 
 function _refreshBpcTotal(bpoList, calcTotal) {
   const tfoot = document.getElementById('bpc-foot');
+  let activeCalcTotal = 0;
   let userTotal = 0;
   for (const b of bpoList) {
-    if (!b.is_copyable && b.activity_id !== 11) {
+    if (_bpoToggled.has(b.type_id) || b.activity_id === 11) continue;
+    if (!b.is_copyable) {
       userTotal += _userBpcCosts[b.type_id] || 0;
+    } else {
+      activeCalcTotal += b.copy_cost || 0;
     }
   }
-  const grand = (calcTotal || 0) + userTotal;
+  const grand = activeCalcTotal + userTotal;
   tfoot.innerHTML = `
     <tr class="bpc-total-row">
       <td colspan="5" style="text-align:right;color:var(--text-muted);font-size:12px">Total BPC acquisition cost</td>
@@ -270,6 +284,7 @@ async function calculate() {
   if (parsedTypeId !== lastBuiltTypeId) {
     bpoMeOverrides = {};
     _userBpcCosts = {};
+    _bpoToggled = new Set();
     lastBuiltTypeId = parsedTypeId;
   }
   if (Object.keys(bpoMeOverrides).length > 0) {

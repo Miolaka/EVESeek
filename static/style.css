@@ -317,6 +317,43 @@ tr:hover td { background: var(--surface2); }
   font-size: 13px;
 }
 
+/* ── BPC cost cell: toggle pill + value side by side ─────────────────────── */
+.bpc-cost-cell {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.bpc-toggle {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  border: 1px solid;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  line-height: 1.6;
+}
+.bpc-toggle.is-bpc {
+  background: rgba(88, 166, 255, 0.12);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.bpc-toggle.is-bpc:hover {
+  background: rgba(88, 166, 255, 0.25);
+}
+.bpc-toggle.is-bpo {
+  background: rgba(139, 148, 158, 0.12);
+  border-color: var(--text-muted);
+  color: var(--text-muted);
+}
+.bpc-toggle.is-bpo:hover {
+  background: rgba(139, 148, 158, 0.25);
+}
+
 /* ── BPC total footer row ─────────────────────────────────────────────────── */
 .bpc-total-row td {
   border-top: 1px solid var(--border);
