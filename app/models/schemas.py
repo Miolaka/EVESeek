@@ -47,9 +47,14 @@ class BOMNode(BaseModel):
 class BPOInfo(BaseModel):
     type_id: int
     name: str
-    activity_id: int   # 1 = manufacturing, 11 = reaction
+    activity_id: int        # 1 = manufacturing, 11 = reaction
     me_level: int
     is_root: bool = False
+    total_runs: int = 0     # total job runs needed
+    runs_per_copy: int = 0  # max runs per BPC copy (maxProductionLimit)
+    copies_needed: int = 0  # ceil(total_runs / runs_per_copy)
+    is_copyable: bool = True  # False = faction/LP BPC → needs user-input cost
+    copy_cost: ISK = Decimal("0")  # calculated copy job fee for all copies
 
 
 class BuildCostResponse(BaseModel):
@@ -59,6 +64,7 @@ class BuildCostResponse(BaseModel):
     cost_breakdown: CostBreakdown
     bom_tree: list[BOMNode]
     bpo_list: list[BPOInfo] = Field(default_factory=list)
+    bpc_total_copy_cost: ISK = Decimal("0")  # sum of all calculable copy job fees
 
 
 BOMNode.model_rebuild()

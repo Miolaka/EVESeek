@@ -109,18 +109,75 @@ makeAutocomplete({
 let bpoMeOverrides = {};
 let lastBuiltTypeId = null;
 
-// ── BPC tree walker ───────────────────────────────────────────────────────────
+// ── BPC section ───────────────────────────────────────────────────────────────
 
-function collectBPC(nodes, out = []) {
-  for (const node of nodes) {
-    if (node.bpc_copies_needed > 0) {
-      out.push(node);
+let _userBpcCosts = {};   // type_id → user-entered ISK for non-copyable BPCs
+
+function renderBpcList(bpoList, bpcTotalCalc) {
+  const tbody = document.getElementById('bpc-body');
+  const tfoot = document.getElementById('bpc-foot');
+  tbody.innerHTML = '';
+  tfoot.innerHTML = '';
+  if (!bpoList || !bpoList.length) return;
+
+  let calcTotal = bpcTotalCalc || 0;
+  let hasUserInput = false;
+
+  for (const b of bpoList) {
+    const isReact = b.activity_id === 11;
+    const actLabel = isReact
+      ? '<span class="muted">Reaction</span>'
+      : b.is_root ? 'Manufacturing <span class="muted">(hull)</span>' : 'Manufacturing';
+
+    let costCell;
+    if (isReact) {
+      costCell = '<span class="muted">BPO</span>';
+    } else if (!b.is_copyable) {
+      hasUserInput = true;
+      const saved = _userBpcCosts[b.type_id] || '';
+      costCell = `<input type="number" class="bpc-cost-input" min="0" step="1000000"
+        placeholder="Enter cost…" value="${saved}"
+        data-type-id="${b.type_id}">`;
+    } else {
+      costCell = `<span class="isk">${fmtISK(b.copy_cost)}</span>`;
     }
-    if (node.children && node.children.length) {
-      collectBPC(node.children, out);
+
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${b.name}</td>
+      <td class="muted" style="font-size:12px">${actLabel}</td>
+      <td class="num">${fmtNum(b.total_runs)}</td>
+      <td class="num">${fmtNum(b.copies_needed)}</td>
+      <td class="num muted">${fmtNum(b.runs_per_copy)}</td>
+      <td class="num">${costCell}</td>`;
+    tbody.appendChild(tr);
+
+    if (!b.is_copyable && !isReact) {
+      tr.querySelector('.bpc-cost-input').addEventListener('input', e => {
+        const v = parseFloat(e.target.value) || 0;
+        _userBpcCosts[b.type_id] = v;
+        _refreshBpcTotal(bpoList, bpcTotalCalc);
+      });
     }
   }
-  return out;
+
+  _refreshBpcTotal(bpoList, bpcTotalCalc);
+}
+
+function _refreshBpcTotal(bpoList, calcTotal) {
+  const tfoot = document.getElementById('bpc-foot');
+  let userTotal = 0;
+  for (const b of bpoList) {
+    if (!b.is_copyable && b.activity_id !== 11) {
+      userTotal += _userBpcCosts[b.type_id] || 0;
+    }
+  }
+  const grand = (calcTotal || 0) + userTotal;
+  tfoot.innerHTML = `
+    <tr class="bpc-total-row">
+      <td colspan="5" style="text-align:right;color:var(--text-muted);font-size:12px">Total BPC acquisition cost</td>
+      <td class="num isk">${fmtISK(grand)}</td>
+    </tr>`;
 }
 
 // ── BOM tree rendering ────────────────────────────────────────────────────────
@@ -212,6 +269,7 @@ async function calculate() {
   const parsedTypeId = parseInt(typeId);
   if (parsedTypeId !== lastBuiltTypeId) {
     bpoMeOverrides = {};
+    _userBpcCosts = {};
     lastBuiltTypeId = parsedTypeId;
   }
   if (Object.keys(bpoMeOverrides).length > 0) {
@@ -250,6 +308,7 @@ async function calculate() {
     // Render build result immediately — don't wait for compare
     renderBuild(build, null);
     renderBpoList(build.bpo_list || []);
+    renderBpcList(build.bpo_list || [], build.bpc_total_copy_cost || 0);
     document.getElementById('results').style.display = 'block';
     setLoading(false);
 
@@ -340,28 +399,7 @@ function renderBuild(data, compareData) {
     tbody.appendChild(divTr);
   }
 
-  // BPC table
-  const bpcNodes = collectBPC(data.bom_tree);
-  const bpcBody = document.getElementById('bpc-body');
-  bpcBody.innerHTML = '';
-  if (bpcNodes.length) {
-    for (const node of bpcNodes) {
-      const tr = document.createElement('tr');
-      const totalRuns = node.bpc_copies_needed * node.max_runs_per_bpc;
-      tr.innerHTML = `
-        <td>${node.name}</td>
-        <td class="num">${fmtNum(node.bpc_copies_needed)}</td>
-        <td class="num muted">${fmtNum(node.max_runs_per_bpc)}</td>
-        <td class="num muted">${fmtNum(totalRuns)}</td>
-      `;
-      bpcBody.appendChild(tr);
-    }
-  } else {
-    const tr = document.createElement('tr');
-    tr.innerHTML = '<td colspan="4" class="muted">No intermediate blueprints</td>';
-    bpcBody.appendChild(tr);
-  }
-
+  // BPC table — now driven from bpo_list; called separately after renderBuild
   // BOM tree
   const bomTree = document.getElementById('bom-tree');
   bomTree.innerHTML = '';

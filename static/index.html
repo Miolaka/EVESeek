@@ -137,17 +137,20 @@
 
       <!-- BPC table -->
       <div class="section" id="bpc-section">
-        <div class="section-title">BPC runs needed</div>
-        <table>
+        <div class="section-title">Blueprint copies</div>
+        <table id="bpc-table">
           <thead>
             <tr>
               <th>Blueprint</th>
-              <th class="num">Copies needed</th>
-              <th class="num">Max runs/copy</th>
+              <th>Activity</th>
               <th class="num">Total runs</th>
+              <th class="num">Copies</th>
+              <th class="num">Runs/copy</th>
+              <th class="num" style="width:160px">Copy cost</th>
             </tr>
           </thead>
           <tbody id="bpc-body"></tbody>
+          <tfoot id="bpc-foot"></tfoot>
         </table>
       </div>
 
@@ -254,6 +257,6 @@
     </div>
   </div>
 
-  <script src="/app.js?v=14"></script>
+  <script src="/app.js?v=15"></script>
 </body>
 </html>

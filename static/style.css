@@ -309,6 +309,21 @@ tr:hover td { background: var(--surface2); }
   font-size: 13px;
 }
 
+/* ── BPC copy cost user input ─────────────────────────────────────────────── */
+.bpc-cost-input {
+  width: 140px;
+  text-align: right;
+  padding: 3px 6px;
+  font-size: 13px;
+}
+
+/* ── BPC total footer row ─────────────────────────────────────────────────── */
+.bpc-total-row td {
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+  font-weight: 600;
+}
+
 /* ── Header config button ─────────────────────────────────────────────────── */
 .btn-config {
   margin-left: auto;

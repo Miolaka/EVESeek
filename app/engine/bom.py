@@ -260,18 +260,18 @@ def _build_node(
     )
 
 
-def _compute_flat_bom(root_type_id: int, root_qty: int, req: BuildCostRequest) -> dict[int, int]:
+def _compute_flat_bom(
+    root_type_id: int, root_qty: int, req: BuildCostRequest
+) -> tuple[dict[int, int], dict[int, int]]:
     """
     Flat BOM explosion using topological sort.
 
-    The recursive _build_node approach fragments demand: when NFB is needed by
-    TC, RTA and SA independently, each branch calls ceil(qty/40) separately, so
-    19 + 9 + 9 = 37 runs instead of the correct ceil(1200/40) = 30.
+    Collects ALL demand for every intermediate type BEFORE computing production
+    runs, eliminating the fragmentation caused by per-branch ceiling.
 
-    This function collects ALL demand for every intermediate type BEFORE
-    computing its production runs, eliminating that over-count.
-
-    Returns {leaf_type_id: total_quantity} for every market-buy item.
+    Returns (leaf_demands, node_runs) where:
+      leaf_demands: {leaf_type_id: total_quantity} for every market-buy item
+      node_runs:    {manufactured_type_id: runs_needed} for every built node
     """
     # ── Phase 1: discover the full BOM graph (no quantities, just topology) ──
     node_info: dict[int, dict] = {}
@@ -324,6 +324,7 @@ def _compute_flat_bom(root_type_id: int, root_qty: int, req: BuildCostRequest) -
     demands: dict[int, int] = defaultdict(int)
     demands[root_type_id] = root_qty
     leaf_demands: dict[int, int] = defaultdict(int)
+    node_runs: dict[int, int] = {}
 
     queue: deque[int] = deque(tid for tid in manufactured if in_degree[tid] == 0)
 
@@ -336,6 +337,7 @@ def _compute_flat_bom(root_type_id: int, root_qty: int, req: BuildCostRequest) -
         qty_per_run = bp["quantity"] or 1
         activity_id = bp["activityID"]
         runs_needed = math.ceil(total_qty / qty_per_run)
+        node_runs[type_id] = runs_needed
 
         if activity_id == ACTIVITY_REACTION:
             default_me = 0
@@ -358,11 +360,16 @@ def _compute_flat_bom(root_type_id: int, root_qty: int, req: BuildCostRequest) -
             else:
                 leaf_demands[mid] += mat_qty
 
-    return dict(leaf_demands)
+    return dict(leaf_demands), node_runs
 
 
-def _discover_manufactured_nodes(root_type_id: int, req: BuildCostRequest) -> list[BPOInfo]:
+def _discover_manufactured_nodes(
+    root_type_id: int, req: BuildCostRequest, node_runs: dict[int, int]
+) -> list[BPOInfo]:
     """BFS over the BOM graph; returns one BPOInfo per manufactured (non-leaf) node."""
+    cost_indices = esi.get_system_cost_index(req.system_id)
+    copying_ci = cost_indices.get("copying", Decimal("0"))
+
     result: list[BPOInfo] = []
     discover: deque[tuple[int, int]] = deque([(root_type_id, 0)])
     visited: set[int] = set()
@@ -384,7 +391,9 @@ def _discover_manufactured_nodes(root_type_id: int, req: BuildCostRequest) -> li
         if is_raw or bp is None:
             continue
 
+        bp_type_id = bp["blueprint_type_id"]
         activity_id = bp["activityID"]
+
         if activity_id == ACTIVITY_REACTION:
             me = 0
         elif tid == root_type_id:
@@ -392,15 +401,49 @@ def _discover_manufactured_nodes(root_type_id: int, req: BuildCostRequest) -> li
         else:
             me = req.me_overrides.get(tid, 10)
 
+        total_runs = node_runs.get(tid, 1)
+        runs_per_copy = sde.get_max_production_limit(bp_type_id)
+        copies_needed = math.ceil(total_runs / runs_per_copy)
+
+        # Copy job cost:
+        #   reactions → BPO (show label, no cost)
+        #   faction/storyline/officer/deadspace (meta groups 3,4,5,6,15) → user input
+        #   T1/T2/T3/structure → copy job fee from ESI formula
+        _BPO_ONLY_META = {3, 4, 5, 6, 15}
+        meta_group = sde.get_meta_group(tid) or 1
+        copy_cost = Decimal("0")
+        is_copyable = (
+            activity_id != ACTIVITY_REACTION
+            and sde.has_copy_activity(bp_type_id)
+            and meta_group not in _BPO_ONLY_META
+        )
+        if is_copyable:
+            mats = sde.get_activity_materials(bp_type_id, ACTIVITY_MANUFACTURING)
+            eiv_per_run = sum(
+                (esi.get_adjusted_price(m["materialTypeID"]) or Decimal("0")) * m["quantity"]
+                for m in mats
+            )
+            eiv = eiv_per_run * copies_needed
+            copy_cost = job_cost_manufacturing(
+                eiv, copying_ci,
+                req.structure_bonus, req.facility_tax,
+                req.fw_level,
+            )
+
         result.append(BPOInfo(
             type_id=tid,
             name=type_row["typeName"],
             activity_id=activity_id,
             me_level=me,
             is_root=(tid == root_type_id),
+            total_runs=total_runs,
+            runs_per_copy=runs_per_copy,
+            copies_needed=copies_needed,
+            is_copyable=is_copyable,
+            copy_cost=copy_cost,
         ))
 
-        for mat in sde.get_activity_materials(bp["blueprint_type_id"], activity_id):
+        for mat in sde.get_activity_materials(bp_type_id, activity_id):
             if mat["materialTypeID"] not in visited:
                 discover.append((mat["materialTypeID"], depth + 1))
 
@@ -415,7 +458,7 @@ def build_cost(req: BuildCostRequest):
         raise ValueError(f"Unknown type_id: {req.type_id}")
 
     # Flat BOM gives correct aggregated leaf quantities (no fragmentation)
-    flat_leaves = _compute_flat_bom(req.type_id, req.runs, req)
+    flat_leaves, node_runs = _compute_flat_bom(req.type_id, req.runs, req)
 
     # Pre-warm ESI cache for all leaves before any pricing calls
     _prefetch_leaf_prices(set(flat_leaves.keys()), req)
@@ -441,7 +484,8 @@ def build_cost(req: BuildCostRequest):
         logistics_costs=flat_logistics_cost,
     )
 
-    bpo_list = _discover_manufactured_nodes(req.type_id, req)
+    bpo_list = _discover_manufactured_nodes(req.type_id, req, node_runs)
+    bpc_total = sum(b.copy_cost for b in bpo_list)
 
     return BuildCostResponse(
         type_id=req.type_id,
@@ -456,4 +500,5 @@ def build_cost(req: BuildCostRequest):
         cost_breakdown=corrected,
         bom_tree=root.children,
         bpo_list=bpo_list,
+        bpc_total_copy_cost=bpc_total,
     )
