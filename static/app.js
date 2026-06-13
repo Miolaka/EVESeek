@@ -113,6 +113,8 @@ let lastBuiltTypeId = null;
 
 let _userBpcCosts = {};     // type_id → user-entered ISK for non-copyable BPCs
 let _bpoToggled = new Set(); // type_ids the user has marked as "own BPO"
+let _activeBpcTotal = 0;    // live BPC cost (updated by _refreshBpcTotal, read by renderBuild)
+let _lastBuild = null;      // last build response, re-rendered when BPC total changes
 
 function renderBpcList(bpoList, bpcTotalCalc) {
   const tbody = document.getElementById('bpc-body');
@@ -197,6 +199,11 @@ function _refreshBpcTotal(bpoList, calcTotal) {
       <td class="num isk">${fmtISK(grand)}</td>
       <td></td>
     </tr>`;
+
+  if (grand !== _activeBpcTotal) {
+    _activeBpcTotal = grand;
+    if (_lastBuild) renderBuild(_lastBuild.data, _lastBuild.compareData);
+  }
 }
 
 // ── BOM tree rendering ────────────────────────────────────────────────────────
@@ -290,6 +297,8 @@ async function calculate() {
     bpoMeOverrides = {};
     _userBpcCosts = {};
     _bpoToggled = new Set();
+    _activeBpcTotal = 0;
+    _lastBuild = null;
     lastBuiltTypeId = parsedTypeId;
   }
   if (Object.keys(bpoMeOverrides).length > 0) {
@@ -350,12 +359,14 @@ async function calculate() {
 // ── Render helpers ────────────────────────────────────────────────────────────
 
 function renderBuild(data, compareData) {
+  _lastBuild = { data, compareData };
+
   const bd = data.cost_breakdown;
   const co = compareData?.compressed_ore;
   const constraintMet = co?.leftover_constraint_met !== false;
   const leftoverNet = co?.leftover_net_isk || 0;
-  // Fall back to direct buy when the leftover limit cannot be satisfied
   const useOre = constraintMet && leftoverNet > 0;
+  const bpcCost = _activeBpcTotal;
 
   const noteEl = document.getElementById('total-note');
   if (!constraintMet) {
@@ -368,8 +379,8 @@ function renderBuild(data, compareData) {
   const netTotal = useOre
     ? (co.total_isk + co.refining_fee
        + bd.manufacturing_fees + bd.reaction_fees + (bd.refining_fees || 0)
-       + bd.logistics_costs - leftoverNet)
-    : data.total_cost;
+       + bd.logistics_costs + bpcCost - leftoverNet)
+    : data.total_cost + bpcCost;
 
   document.getElementById('total-cost').textContent = fmtISK(netTotal);
   document.getElementById('total-label').textContent = useOre ? 'Net total cost ' : 'Total cost ';
@@ -382,6 +393,7 @@ function renderBuild(data, compareData) {
         ['Reaction fees',                 bd.reaction_fees],
         ['Refining fees',                 bd.refining_fees],
         ['Logistics',                     bd.logistics_costs],
+        ['Blueprint copies',              bpcCost],
       ]
     : [
         ['Material costs',      bd.material_costs],
@@ -389,6 +401,7 @@ function renderBuild(data, compareData) {
         ['Reaction fees',       bd.reaction_fees],
         ['Refining fees',       bd.refining_fees],
         ['Logistics',           bd.logistics_costs],
+        ['Blueprint copies',    bpcCost],
       ];
 
   const tbody = document.getElementById('breakdown-body');
