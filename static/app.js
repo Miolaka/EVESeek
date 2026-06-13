@@ -1,5 +1,15 @@
 'use strict';
 
+// ── Section collapse ──────────────────────────────────────────────────────────
+
+function toggleSection(id) {
+  const sec = document.getElementById(id);
+  if (!sec) return;
+  sec.classList.toggle('collapsed');
+  const chevron = sec.querySelector('.sec-chevron');
+  if (chevron) chevron.textContent = sec.classList.contains('collapsed') ? '▸' : '▾';
+}
+
 // ── Formatting ────────────────────────────────────────────────────────────────
 
 function fmtISK(v) {
@@ -199,6 +209,9 @@ function _refreshBpcTotal(bpoList, calcTotal) {
       <td class="num isk">${fmtISK(grand)}</td>
       <td></td>
     </tr>`;
+
+  const badge = document.getElementById('bpc-cost-badge');
+  if (badge) badge.textContent = grand > 0 ? fmtISK(grand) : '';
 
   if (grand !== _activeBpcTotal) {
     _activeBpcTotal = grand;
@@ -653,6 +666,8 @@ function renderLeftovers(co) {
   }
 
   document.getElementById('leftover-section').style.display = 'block';
+  const leftoverBadge = document.getElementById('leftover-cost-badge');
+  if (leftoverBadge) leftoverBadge.textContent = co.leftover_net_isk > 0 ? '−' + fmtISK(co.leftover_net_isk) : '';
 }
 
 // ── Shopping list ─────────────────────────────────────────────────────────────

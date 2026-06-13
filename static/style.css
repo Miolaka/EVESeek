@@ -130,6 +130,36 @@ input::placeholder { color: var(--text-muted); }
   margin-bottom: 10px;
 }
 
+/* ── Collapsible sections ─────────────────────────────────────────────────── */
+.collapsible > .section-title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  padding: 4px 0;
+  margin-bottom: 10px;
+}
+.collapsible > .section-title:hover { color: var(--text); }
+
+.sec-chevron {
+  font-size: 10px;
+  flex-shrink: 0;
+  transition: transform 0.15s;
+}
+.sec-name { flex-shrink: 0; }
+.sec-cost {
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  margin-left: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.collapsible.collapsed > .section-body { display: none; }
+.collapsible.collapsed > .section-title { margin-bottom: 0; }
+
 .total-line {
   font-size: 22px;
   font-weight: 700;

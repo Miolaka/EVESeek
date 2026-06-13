@@ -99,130 +99,166 @@
 
     <div id="error-box" class="error-box" style="display:none"></div>
     <div id="results">
-      <!-- Total -->
-      <div class="section">
-        <div class="total-line">
-          <span class="label" id="total-label">Total cost </span>
-          <span id="total-cost" class="isk"></span>
+      <!-- Total cost breakdown -->
+      <div class="section collapsible" id="section-total">
+        <div class="section-title" onclick="toggleSection('section-total')">
+          <span class="sec-chevron">▾</span>
+          <span class="sec-name" id="total-label">Total cost </span>
+          <span class="sec-cost isk" id="total-cost"></span>
         </div>
-        <div id="total-note" class="total-note" style="display:none"></div>
-        <table>
-          <thead>
-            <tr>
-              <th>Cost component</th>
-              <th class="num">ISK</th>
-              <th class="num">%</th>
-            </tr>
-          </thead>
-          <tbody id="breakdown-body"></tbody>
-        </table>
+        <div class="section-body">
+          <div id="total-note" class="total-note" style="display:none"></div>
+          <table>
+            <thead>
+              <tr>
+                <th>Cost component</th>
+                <th class="num">ISK</th>
+                <th class="num">%</th>
+              </tr>
+            </thead>
+            <tbody id="breakdown-body"></tbody>
+          </table>
+        </div>
       </div>
 
       <hr class="divider">
 
       <!-- Shopping list -->
-      <div class="section" id="shopping-section" style="display:none">
-        <div class="section-title">Shopping list</div>
-        <div class="shop-tabs">
-          <button class="shop-tab" id="tab-ore" onclick="switchShopTab('ore')"></button>
-          <button class="shop-tab" id="tab-direct" onclick="switchShopTab('direct')"></button>
+      <div class="section collapsible" id="shopping-section" style="display:none">
+        <div class="section-title" onclick="toggleSection('shopping-section')">
+          <span class="sec-chevron">▾</span>
+          <span class="sec-name">Shopping list</span>
+          <span class="sec-cost muted" id="shopping-cost-badge"></span>
         </div>
-        <div class="shop-body">
-          <textarea id="shopping-list" class="shopping-list" readonly spellcheck="false"></textarea>
-          <button class="btn-copy" id="copy-btn" onclick="copyShoppingList()">Copy</button>
+        <div class="section-body">
+          <div class="shop-tabs">
+            <button class="shop-tab" id="tab-ore" onclick="switchShopTab('ore')"></button>
+            <button class="shop-tab" id="tab-direct" onclick="switchShopTab('direct')"></button>
+          </div>
+          <div class="shop-body">
+            <textarea id="shopping-list" class="shopping-list" readonly spellcheck="false"></textarea>
+            <button class="btn-copy" id="copy-btn" onclick="copyShoppingList()">Copy</button>
+          </div>
         </div>
       </div>
 
       <hr class="divider">
 
       <!-- BPC table -->
-      <div class="section" id="bpc-section">
-        <div class="section-title">Blueprint copies</div>
-        <table id="bpc-table">
-          <thead>
-            <tr>
-              <th>Blueprint</th>
-              <th>Activity</th>
-              <th class="num">Total runs</th>
-              <th class="num">Copies</th>
-              <th class="num">Runs/copy</th>
-              <th class="num" style="width:160px">Copy cost</th>
-              <th style="width:110px"></th>
-            </tr>
-          </thead>
-          <tbody id="bpc-body"></tbody>
-          <tfoot id="bpc-foot"></tfoot>
-        </table>
+      <div class="section collapsible" id="bpc-section">
+        <div class="section-title" onclick="toggleSection('bpc-section')">
+          <span class="sec-chevron">▾</span>
+          <span class="sec-name">Blueprint copies</span>
+          <span class="sec-cost isk" id="bpc-cost-badge"></span>
+        </div>
+        <div class="section-body">
+          <table id="bpc-table">
+            <thead>
+              <tr>
+                <th>Blueprint</th>
+                <th>Activity</th>
+                <th class="num">Total runs</th>
+                <th class="num">Copies</th>
+                <th class="num">Runs/copy</th>
+                <th class="num" style="width:160px">Copy cost</th>
+                <th style="width:110px"></th>
+              </tr>
+            </thead>
+            <tbody id="bpc-body"></tbody>
+            <tfoot id="bpc-foot"></tfoot>
+          </table>
+        </div>
       </div>
 
       <hr class="divider">
 
       <!-- BPO ME levels -->
-      <div class="section" id="bpo-section" style="display:none">
-        <div class="section-title">BPO Research Levels</div>
-        <table id="bpo-table">
-          <thead>
-            <tr>
-              <th>Blueprint</th>
-              <th>Activity</th>
-              <th class="num" style="width:90px">ME</th>
-            </tr>
-          </thead>
-          <tbody id="bpo-body"></tbody>
-        </table>
+      <div class="section collapsible" id="bpo-section" style="display:none">
+        <div class="section-title" onclick="toggleSection('bpo-section')">
+          <span class="sec-chevron">▾</span>
+          <span class="sec-name">BPO Research Levels</span>
+        </div>
+        <div class="section-body">
+          <table id="bpo-table">
+            <thead>
+              <tr>
+                <th>Blueprint</th>
+                <th>Activity</th>
+                <th class="num" style="width:90px">ME</th>
+              </tr>
+            </thead>
+            <tbody id="bpo-body"></tbody>
+          </table>
+        </div>
       </div>
 
       <hr class="divider">
 
       <!-- Source comparison -->
-      <div class="section" id="compare-section" style="display:none">
-        <div class="section-title">Material source comparison</div>
-        <table class="compare-table">
-          <thead>
-            <tr>
-              <th></th>
-              <th>Direct buy</th>
-              <th>Compressed ore + refine</th>
-            </tr>
-          </thead>
-          <tbody id="compare-summary-body"></tbody>
-        </table>
-        <br>
-        <div class="section-title">Ore breakdown</div>
-        <table>
-          <thead>
-            <tr>
-              <th>Ore</th>
-              <th>For mineral</th>
-              <th class="num">Units</th>
-              <th class="num">Ore cost</th>
-              <th class="num">Refining fee</th>
-              <th class="num">Byproduct credit</th>
-              <th class="num">Effective ISK</th>
-              <th class="num">Ore m³</th>
-              <th class="num">Refined m³</th>
-            </tr>
-          </thead>
-          <tbody id="ore-body"></tbody>
-        </table>
+      <div class="section collapsible" id="compare-section" style="display:none">
+        <div class="section-title" onclick="toggleSection('compare-section')">
+          <span class="sec-chevron">▾</span>
+          <span class="sec-name">Material source comparison</span>
+        </div>
+        <div class="section-body">
+          <table class="compare-table">
+            <thead>
+              <tr>
+                <th></th>
+                <th>Direct buy</th>
+                <th>Compressed ore + refine</th>
+              </tr>
+            </thead>
+            <tbody id="compare-summary-body"></tbody>
+          </table>
+          <br>
+          <div class="section-title" style="pointer-events:none">Ore breakdown</div>
+          <table>
+            <thead>
+              <tr>
+                <th>Ore</th>
+                <th>For mineral</th>
+                <th class="num">Units</th>
+                <th class="num">Ore cost</th>
+                <th class="num">Refining fee</th>
+                <th class="num">Byproduct credit</th>
+                <th class="num">Effective ISK</th>
+                <th class="num">Ore m³</th>
+                <th class="num">Refined m³</th>
+              </tr>
+            </thead>
+            <tbody id="ore-body"></tbody>
+          </table>
+        </div>
       </div>
 
       <!-- Leftover materials -->
-      <div class="section" id="leftover-section" style="display:none">
-        <div class="section-title">Leftover materials</div>
-        <table id="leftover-table">
-          <thead id="leftover-thead"></thead>
-          <tbody id="leftover-body"></tbody>
-          <tfoot id="leftover-tfoot"></tfoot>
-        </table>
+      <div class="section collapsible" id="leftover-section" style="display:none">
+        <div class="section-title" onclick="toggleSection('leftover-section')">
+          <span class="sec-chevron">▾</span>
+          <span class="sec-name">Leftover materials</span>
+          <span class="sec-cost green" id="leftover-cost-badge"></span>
+        </div>
+        <div class="section-body">
+          <table id="leftover-table">
+            <thead id="leftover-thead"></thead>
+            <tbody id="leftover-body"></tbody>
+            <tfoot id="leftover-tfoot"></tfoot>
+          </table>
+        </div>
       </div>
 
       <hr class="divider">
 
       <!-- BOM tree -->
-      <div class="section">
-        <div class="section-title">Bill of materials</div>
-        <div id="bom-tree" class="bom-tree"></div>
+      <div class="section collapsible" id="section-bom">
+        <div class="section-title" onclick="toggleSection('section-bom')">
+          <span class="sec-chevron">▾</span>
+          <span class="sec-name">Bill of materials</span>
+        </div>
+        <div class="section-body">
+          <div id="bom-tree" class="bom-tree"></div>
+        </div>
       </div>
     </div>
   </main>
@@ -258,6 +294,6 @@
     </div>
   </div>
 
-  <script src="/app.js?v=18"></script>
+  <script src="/app.js?v=19"></script>
 </body>
 </html>
