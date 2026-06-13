@@ -16,7 +16,8 @@ exactly for job fees, material efficiency, and market fill prices.
 - **Per-item ME overrides** — editable BPO Research Levels table; root hull uses user ME, sub-manufactured items default to ME 10, reactions always ME 0
 - **Structure rig configuration** — per-activity slot ME bonuses (Sotiyo/Azbel/Tatara + rig sets), pre-loaded at startup so bonuses apply without opening the modal
 - **ESI disk cache** — SQLite persistent cache survives server restarts; parallel pre-fetch before compare loop; expired rows evicted on startup
-- **Blueprint copies section** — full list of BPCs with total runs, copies needed, and in-game copy job fee; faction/navy hulls allow user input; live-summed footer
+- **Blueprint copies section** — full list of BPCs with total runs, copies needed, and in-game copy job fee; per-row BPC/BPO segmented toggle; faction/navy/drop-only hulls (no NPC BPO) allow user input; live-summed footer included in total cost
+- **Collapsible sections** — every result section folds to its title; cost badge shown inline (total, BPC total, leftover credit)
 - **Non-blocking compare** — build cost renders immediately; ore comparison populates in the background (important for large items like Keepstar/Avatar)
 
 ## Stack

@@ -219,6 +219,14 @@ get_max_production_limit(blueprint_type_id)
 # Returns 1 if blueprint not found.
 # Examples: Phoenix Navy Issue Blueprint = 1, Capital Core Temp Reg Blueprint = 40
 
+has_copy_activity(blueprint_type_id)
+# Returns True only if the blueprint has activityID=5 AND its invTypes row has a
+# non-null marketGroupID (i.e. it is purchasable from an NPC market as a BPO).
+# Critical: the SDE gives Triglavian ships (Zirnitra, Leshak, Drekavac) and SoCT
+# ships (Gnosis, Praxis) activityID=5 in industryActivity, but their blueprint
+# type has marketGroupID=NULL — no BPO exists in-game. Without the marketGroupID
+# guard these would be classified as copyable and given a fake calculated fee.
+
 get_ore_sources_for_mineral(mineral_type_id)
 # Returns all compressed ores (categoryID=25, typeName LIKE 'Compressed %') that
 # yield this mineral on refining, with portionSize and max_minerals_per_batch.
@@ -402,7 +410,7 @@ class BPOInfo(BaseModel):
 
 `is_copyable` is `False` when:
 - `activity_id == 11` (reaction — no copying activity)
-- Blueprint has no activityID=5 in `industryActivity`
+- `sde.has_copy_activity(bp_type_id)` returns False (no activityID=5, or blueprint has no NPC marketGroupID — covers Triglavian/SoCT drop-only BPCs)
 - `meta_group` in `{3, 4, 5, 6, 15}` (Storyline, Faction, Officer, Deadspace, Abyssal)
 
 Copy job fee formula (same as manufacturing, using "copying" cost index):
@@ -694,13 +702,15 @@ Three files: `index.html`, `style.css`, `app.js`.
   headline and uses ore path costs (`co.total_isk + co.refining_fee`) as material cost
   basis. Net total = ore + fees − `leftover_net_isk`. If `leftover_constraint_met` is
   false, a muted note appears below the headline and direct-buy costs are used instead.
-- **Blueprint copies section**: replaces old BPC table. Populated by `renderBpcList()` from
-  `bpo_list` in the build-cost response. Shows blueprint name, activity, total runs, copies
-  needed, runs/copy, and copy cost. Copy cost is:
-  - Calculated in-game copy job fee (ISK) for copyable blueprints (T1, T2, Structure T1/T2)
-  - User input field for faction/navy/officer hulls (`is_copyable = false`)
-  - "BPO" label for reactions (no copying activity)
-  Footer shows live-summed total of all copy costs including user inputs.
+- **Blueprint copies section**: populated by `renderBpcList()` from `bpo_list`. Columns:
+  blueprint, activity, total runs, copies, runs/copy, copy cost, BPC/BPO toggle.
+  - Copyable blueprints: calculated in-game copy job fee
+  - Drop-only BPCs (Triglavian, SoCT) and faction/navy/officer hulls (`is_copyable=false`): user input field
+  - Reactions: static "BPO" label, no toggle
+  - Each non-reaction row has an Apple-style segmented BPC/BPO toggle (separate rightmost column). Toggling to BPO zeroes the row's contribution to the total.
+  - Footer live-sums all active (BPC-state) copy costs including user inputs.
+  - BPC total is included as a "Blueprint copies" row in the cost breakdown table and added to `total_cost`. Toggles re-render the breakdown headline immediately via `_activeBpcTotal` / `_lastBuild` pattern.
+  - `_bpoToggled` set and `_userBpcCosts` dict reset when the user selects a different item.
 - **Compare table**: Direct buy vs compressed ore side-by-side. Shows:
   - Net material cost (ore purchase − `leftover_net_isk`)
   - Ore purchase cost (sub-row)
@@ -726,6 +736,16 @@ Three files: `index.html`, `style.css`, `app.js`.
   Shows quantity, total cost, and BPC info per node.
 - **Enter key**: triggers Calculate when focus is on an input (unless an autocomplete
   dropdown is open).
+
+### Collapsible sections
+
+Every result section (`section-title` + `section-body` inside `.collapsible`) can be
+folded by clicking the title. `toggleSection(id)` adds/removes the `collapsed` CSS class;
+`.collapsible.collapsed > .section-body { display: none }` hides the body. A ▾/▸ chevron
+updates on toggle. Cost badges (`.sec-cost`) in the title show key values when collapsed:
+- `#total-cost` — headline total (always visible in title)
+- `#bpc-cost-badge` — live BPC total (updated by `_refreshBpcTotal`)
+- `#leftover-cost-badge` — net leftover credit (set by `renderLeftover`)
 
 ### Cache-busting
 
@@ -951,6 +971,15 @@ class CompareMaterialSourceRequest(BaseModel):
     Fullerites). Moon materials (Atmospheric Gases, Evaporite Deposits, Tungsten, Platinum,
     Cobalt, etc.) live in group 427. Using the wrong group ID causes moon material nodes
     to recurse instead of being treated as market leaves.
+
+17. **`compare.py` must unpack the `_compute_flat_bom` tuple**. `_compute_flat_bom` returns
+    `(leaf_demands, node_runs)`. `compare.py` must unpack with `flat_bom, _ = ...`.
+    Using the tuple directly causes `AttributeError: 'tuple' object has no attribute 'items'`
+    and a 500 error on the compare endpoint, hiding the shopping list and ore comparison sections.
+
+18. **Triglavian/SoCT blueprints have `activityID=5` in the SDE but no NPC BPO**.
+    `has_copy_activity` must join `invTypes` and require `marketGroupID IS NOT NULL`.
+    Without this, Zirnitra, Leshak, Gnosis, etc. are incorrectly marked copyable.
 
 ---
 
