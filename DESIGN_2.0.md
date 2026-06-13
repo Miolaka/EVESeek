@@ -355,13 +355,16 @@ adjusted prices. Using input EIV gives ~209M ISK manufacturing fees vs ~1.4M ISK
 
 ```python
 def ceil_qty(base_qty, runs, me_level, structure_bonus=0.0):
-    per_run = max(1, math.ceil(base_qty * (1 - me_level * 0.01) * (1 - structure_bonus)))
-    return per_run * runs
+    # EVE batch formula: ceiling applied once across the full batch, not per run.
+    return max(runs, math.ceil(base_qty * runs * (1 - me_level * 0.01) * (1 - structure_bonus)))
 ```
 
-EVE rounds up per run, then multiplies by run count — not the other way around.
+EVE applies the ceiling once to the **entire batch** (base × runs × ME factor × SB factor),
+not once per run. For example, Coolant (base=9, ME10, 3 runs): per-run formula gives
+`ceil(8.1) × 3 = 27`; batch formula gives `ceil(8.1 × 3) = ceil(24.3) = 25`. The batch
+formula is correct. `max(runs, ...)` ensures at least 1 unit per run regardless of ME.
 `structure_bonus` (material reduction from EC rigs) is applied multiplicatively inside the
-same `ceil()`, not after. Both reductions must be inside the ceiling.
+same `ceil()`, not after.
 
 **ME level rules per node** (applied in both `_build_node` and `_compute_flat_bom`):
 
@@ -380,8 +383,35 @@ the BPO Research Levels UI table. The frontend resets overrides when a different
 selected. Reactions and the root hull are read-only in the UI.
 
 `build_cost()` also returns `bpo_list: list[BPOInfo]` — one entry per manufactured/reacted
-node in the BOM (discovered by BFS), used to populate the BPO Research Levels table.
-`BPOInfo` carries `type_id`, `name`, `activity_id`, `me_level`, `is_root`.
+node in the BOM (discovered by BFS). Used for both the BPO Research Levels table and the
+Blueprint Copies section. Fields:
+
+```python
+class BPOInfo(BaseModel):
+    type_id: int
+    name: str
+    activity_id: int        # 1 = manufacturing, 11 = reaction
+    me_level: int
+    is_root: bool = False
+    total_runs: int = 0     # total job runs needed across the build
+    runs_per_copy: int = 0  # maxProductionLimit from industryBlueprints
+    copies_needed: int = 0  # ceil(total_runs / runs_per_copy)
+    is_copyable: bool = True  # False for faction/navy/officer → user input in UI
+    copy_cost: ISK = Decimal("0")  # in-game copy job fee for all copies combined
+```
+
+`is_copyable` is `False` when:
+- `activity_id == 11` (reaction — no copying activity)
+- Blueprint has no activityID=5 in `industryActivity`
+- `meta_group` in `{3, 4, 5, 6, 15}` (Storyline, Faction, Officer, Deadspace, Abyssal)
+
+Copy job fee formula (same as manufacturing, using "copying" cost index):
+```
+EIV = sum(adjusted_price[material] × base_qty[material]) × copies_needed
+copy_cost = EIV × (copying_ci × (1-sb) + facility_tax + 0.04) × (1 - fw_level × 0.1)
+```
+The "copying" cost index is fetched from `get_system_cost_index()` alongside manufacturing
+and reaction indices — all six activity types are returned by one ESI call.
 
 ### 8.5 Job Fees
 
@@ -664,8 +694,13 @@ Three files: `index.html`, `style.css`, `app.js`.
   headline and uses ore path costs (`co.total_isk + co.refining_fee`) as material cost
   basis. Net total = ore + fees − `leftover_net_isk`. If `leftover_constraint_met` is
   false, a muted note appears below the headline and direct-buy costs are used instead.
-- **BPC table**: all non-leaf BOM nodes with `bpc_copies_needed > 0`, collected by
-  `collectBPC()` tree walk. Shows copies needed, max runs/copy, total runs.
+- **Blueprint copies section**: replaces old BPC table. Populated by `renderBpcList()` from
+  `bpo_list` in the build-cost response. Shows blueprint name, activity, total runs, copies
+  needed, runs/copy, and copy cost. Copy cost is:
+  - Calculated in-game copy job fee (ISK) for copyable blueprints (T1, T2, Structure T1/T2)
+  - User input field for faction/navy/officer hulls (`is_copyable = false`)
+  - "BPO" label for reactions (no copying activity)
+  Footer shows live-summed total of all copy costs including user inputs.
 - **Compare table**: Direct buy vs compressed ore side-by-side. Shows:
   - Net material cost (ore purchase − `leftover_net_isk`)
   - Ore purchase cost (sub-row)
@@ -895,10 +930,11 @@ class CompareMaterialSourceRequest(BaseModel):
     cost breakdown and headline must use direct-buy costs. Do not show the leftover section
     in this state — it would imply the ore path is active when it is not.
 
-13. **`ceil_qty` must round per run, not on the total**. The old formula
-    `ceil(base × runs × (1 - ME))` over-counts materials for multi-run reactions:
-    rounding once on the aggregate total is wrong because EVE rounds per job. The correct
-    formula rounds per run first, then multiplies: `max(1, ceil(base × (1-ME) × (1-sb))) × runs`.
+13. **`ceil_qty` uses the batch formula, not per-run ceiling**. EVE applies ONE ceiling
+    across the full batch: `max(runs, ceil(base × runs × (1-ME) × (1-sb)))`. An older
+    per-run formula `max(1, ceil(base × (1-ME) × (1-sb))) × runs` over-counts when
+    fractional rounding accumulates differently across a large batch. The batch formula
+    is implemented in `app/core/utils.py`.
 
 14. **`runs_needed` must be computed per BOM node, not from top-level `req.runs`**. Each
     sub-job has its own run count: `runs_needed = ceil(quantity_needed / qty_per_run)`.
