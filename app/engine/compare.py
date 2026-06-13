@@ -254,7 +254,7 @@ def compare_material_source(req: CompareMaterialSourceRequest) -> CompareMateria
     station_id, is_buy = _STATION_MAP[req.material_source]
     region_id = esi.STATION_REGION[station_id]
 
-    flat_bom = _compute_flat_bom(bom_req.type_id, bom_req.runs, bom_req)
+    flat_bom, _ = _compute_flat_bom(bom_req.type_id, bom_req.runs, bom_req)
     leaves: dict[int, tuple[str, int]] = {}
     for tid, qty in flat_bom.items():
         row = sde.get_type(tid)
