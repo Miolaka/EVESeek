@@ -317,41 +317,53 @@ tr:hover td { background: var(--surface2); }
   font-size: 13px;
 }
 
-/* ── BPC cost cell: toggle pill + value side by side ─────────────────────── */
-.bpc-cost-cell {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
+/* ── BPC segmented control (Apple style) ──────────────────────────────────── */
+.bpc-seg-cell {
+  text-align: center;
+  padding: 4px 10px;
 }
 
-.bpc-toggle {
-  flex-shrink: 0;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.5px;
-  padding: 2px 7px;
-  border-radius: 10px;
-  border: 1px solid;
+.seg-ctrl {
+  display: inline-flex;
+  position: relative;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 2px;
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-  line-height: 1.6;
+  user-select: none;
+  width: 90px;
 }
-.bpc-toggle.is-bpc {
-  background: rgba(88, 166, 255, 0.12);
-  border-color: var(--accent);
-  color: var(--accent);
+
+.seg-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: calc(50% - 2px);
+  bottom: 2px;
+  background: var(--accent);
+  border-radius: 6px;
+  transition: transform 0.2s ease;
+  opacity: 0.85;
 }
-.bpc-toggle.is-bpc:hover {
-  background: rgba(88, 166, 255, 0.25);
+.seg-thumb.at-bpo {
+  transform: translateX(100%);
+  background: var(--text-muted);
 }
-.bpc-toggle.is-bpo {
-  background: rgba(139, 148, 158, 0.12);
-  border-color: var(--text-muted);
+
+.seg-opt {
+  position: relative;
+  flex: 1;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 0;
   color: var(--text-muted);
+  transition: color 0.2s;
+  z-index: 1;
 }
-.bpc-toggle.is-bpo:hover {
-  background: rgba(139, 148, 158, 0.25);
+.seg-opt.active {
+  color: #fff;
 }
 
 /* ── BPC total footer row ─────────────────────────────────────────────────── */

@@ -129,11 +129,6 @@ function renderBpcList(bpoList, bpcTotalCalc) {
       ? '<span class="muted">Reaction</span>'
       : b.is_root ? 'Manufacturing <span class="muted">(hull)</span>' : 'Manufacturing';
 
-    // Reactions keep the static "BPO" label — no toggle
-    const toggleHtml = isReact ? '' :
-      `<button class="bpc-toggle ${isBpo ? 'is-bpo' : 'is-bpc'}"
-        data-type-id="${b.type_id}">${isBpo ? 'BPO' : 'BPC'}</button>`;
-
     let costContent;
     if (isReact || isBpo) {
       costContent = '<span class="muted">BPO</span>';
@@ -145,6 +140,14 @@ function renderBpcList(bpoList, bpcTotalCalc) {
       costContent = `<span class="isk">${fmtISK(b.copy_cost)}</span>`;
     }
 
+    // Segmented BPC/BPO control — reactions get no control
+    const segHtml = isReact ? '' : `
+      <div class="seg-ctrl" data-type-id="${b.type_id}">
+        <div class="seg-thumb ${isBpo ? 'at-bpo' : ''}"></div>
+        <span class="seg-opt ${!isBpo ? 'active' : ''}">BPC</span>
+        <span class="seg-opt ${isBpo ? 'active' : ''}">BPO</span>
+      </div>`;
+
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${b.name}</td>
@@ -152,11 +155,12 @@ function renderBpcList(bpoList, bpcTotalCalc) {
       <td class="num">${fmtNum(b.total_runs)}</td>
       <td class="num">${fmtNum(b.copies_needed)}</td>
       <td class="num muted">${fmtNum(b.runs_per_copy)}</td>
-      <td class="num bpc-cost-cell">${toggleHtml}${costContent}</td>`;
+      <td class="num">${costContent}</td>
+      <td class="bpc-seg-cell">${segHtml}</td>`;
     tbody.appendChild(tr);
 
     if (!isReact) {
-      tr.querySelector('.bpc-toggle').addEventListener('click', () => {
+      tr.querySelector('.seg-ctrl').addEventListener('click', () => {
         if (_bpoToggled.has(b.type_id)) _bpoToggled.delete(b.type_id);
         else _bpoToggled.add(b.type_id);
         renderBpcList(bpoList, bpcTotalCalc);
@@ -191,6 +195,7 @@ function _refreshBpcTotal(bpoList, calcTotal) {
     <tr class="bpc-total-row">
       <td colspan="5" style="text-align:right;color:var(--text-muted);font-size:12px">Total BPC acquisition cost</td>
       <td class="num isk">${fmtISK(grand)}</td>
+      <td></td>
     </tr>`;
 }
 
