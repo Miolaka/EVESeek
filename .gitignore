@@ -1,5 +1,6 @@
 # Data — never push SDE or databases
 data/
+!app/data/
 
 # Project docs & config
 requirements.txt
