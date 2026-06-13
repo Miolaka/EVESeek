@@ -226,19 +226,19 @@ async function calculate() {
     compareBody.max_leftover_isk = parseFloat(maxLeftoverRaw);
   }
 
+  // Fire compare request in background — don't await it yet
+  const comparePromise = fetch('/api/v1/compare-material-source', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(compareBody),
+  }).catch(() => null);
+
   try {
-    const [buildRes, compareRes] = await Promise.all([
-      fetch('/api/v1/build-cost', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      }),
-      fetch('/api/v1/compare-material-source', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(compareBody),
-      }),
-    ]);
+    const buildRes = await fetch('/api/v1/build-cost', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
 
     if (!buildRes.ok) {
       const err = await buildRes.json();
@@ -246,16 +246,24 @@ async function calculate() {
     }
 
     const build = await buildRes.json();
-    const compare = compareRes.ok ? await compareRes.json() : null;
 
-    renderBuild(build, compare);
+    // Render build result immediately — don't wait for compare
+    renderBuild(build, null);
     renderBpoList(build.bpo_list || []);
-    if (compare) renderCompare(compare);
-
     document.getElementById('results').style.display = 'block';
+    setLoading(false);
+
+    // Now await compare and update the compare section when ready
+    const compareRes = await comparePromise;
+    if (compareRes && compareRes.ok) {
+      try {
+        const compare = await compareRes.json();
+        renderBuild(build, compare);
+        renderCompare(compare);
+      } catch (_) { /* compare parse failed — leave compare section hidden */ }
+    }
   } catch (e) {
     showError(e.message);
-  } finally {
     setLoading(false);
   }
 }

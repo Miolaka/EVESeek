@@ -13,8 +13,11 @@ exactly for job fees, material efficiency, and market fill prices.
 - **Leftover optimisation** — set a max leftover value (ISK) and/or a haul cost (ISK/m³); the engine greedily swaps ore choices to stay within the limit; falls back to direct buy with a note if the constraint is impossible
 - **Shopping list** — EVE multibuy format, two tabs (compressed ore / direct buy), cheapest tab pre-selected
 - **Leftover materials** — surplus minerals with gross value, haul cost, and net credit columns
-- **ESI disk cache** — SQLite persistent cache survives server restarts; parallel pre-fetch before compare loop
+- **Per-item ME overrides** — editable BPO Research Levels table; root hull uses user ME, sub-manufactured items default to ME 10, reactions always ME 0
+- **Structure rig configuration** — per-activity slot ME bonuses (Sotiyo/Azbel/Tatara + rig sets), pre-loaded at startup so bonuses apply without opening the modal
+- **ESI disk cache** — SQLite persistent cache survives server restarts; parallel pre-fetch before compare loop; expired rows evicted on startup
 - **BPC copy counts** at every BOM node
+- **Non-blocking compare** — build cost renders immediately; ore comparison populates in the background (important for large items like Keepstar/Avatar)
 
 ## Stack
 
@@ -24,6 +27,10 @@ exactly for job fees, material efficiency, and market fill prices.
 - **HTTP client**: httpx (sync)
 - **Precision**: Python `Decimal` for all ISK values
 - **Frontend**: Vanilla HTML/CSS/JS, no build step
+
+## Performance
+
+All SDE lookup functions (`get_type`, `get_group`, `get_activity_materials`, etc.) and the item classifier (`get_slot`) are decorated with `@lru_cache`, eliminating repeated SQLite hits within a session. The SQLite connection is thread-local and persistent (one connection per thread, not per query). Expired ESI disk-cache rows are evicted at server startup. The BOM engine performs a single flat BOM walk rather than three separate tree traversals.
 
 ## Setup
 

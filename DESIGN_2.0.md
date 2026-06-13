@@ -137,11 +137,15 @@ Pure math, no I/O. All formulas replicate in-game behavior.
 
 ```python
 def ceil_qty(base_qty: int, runs: int, me_level: int, structure_bonus: float = 0.0) -> int:
-    # EVE rounding rule: ceil per run first, then multiply by run count.
-    # structure_bonus reduces materials multiplicatively with ME (both applied inside ceil).
-    per_run = max(1, math.ceil(base_qty * (1 - me_level * 0.01) * (1 - structure_bonus)))
-    return per_run * runs
+    # EVE batch formula: ceil is applied to the TOTAL batch, not per run.
+    # max(runs, ...) ensures at least 1 unit per run.
+    return max(runs, math.ceil(base_qty * runs * (1 - me_level * 0.01) * (1 - structure_bonus)))
 ```
+
+**Key invariant**: ceiling is applied once across all runs, not once per run. For small
+fractional quantities (e.g. Coolant base=9, ME=10: 9×0.9=8.1), the per-run formula would
+give ceil(8.1)×R = 9R, whereas the correct batch formula gives ceil(8.1×R) which is smaller
+for any R > 1.
 
 ```python
 def broker_fee_rate(broker_relations, faction_standing, corp_standing) -> Decimal:
@@ -173,9 +177,15 @@ def job_cost_refining(ore_adjusted_price, reprocessing_rate, structure_bonus,
 
 ## 6. Implemented: `app/data/sde.py`
 
-All SQLite queries. Opens a new connection per call (stateless). `sqlite3.Row` factory
-allows column access by name. **Important**: `sqlite3.Row` has no `.get()` method — use
-direct subscript `row["col"]` only.
+All SQLite queries. Uses a **thread-local persistent connection** — one connection per
+thread, reused across calls (not opened/closed per query). `sqlite3.Row` factory allows
+column access by name. **Important**: `sqlite3.Row` has no `.get()` method — use direct
+subscript `row["col"]` only.
+
+Hot lookup functions are decorated with `@lru_cache` (process-level, unbounded within a
+session): `get_type`, `get_blueprint_for_product`, `get_activity_materials`, `get_group`,
+`get_max_production_limit`, `get_meta_group`. SDE data is read-only and never changes
+while the server is running, so caching is always safe.
 
 ```python
 get_type(type_id)
@@ -240,6 +250,10 @@ def get(key: str) -> Optional[Any]
 
 def put(key: str, value: Any, ttl: int) -> None
 # INSERT OR REPLACE INTO cache (key, value, expires) VALUES (?, ?, time.time()+ttl)
+
+def evict_expired() -> None
+# DELETE FROM cache WHERE expires <= time.time()
+# Called once at server startup (via FastAPI lifespan) to prevent unbounded DB growth.
 ```
 
 `client.py` cache lookup order for `get_market_orders`:
@@ -349,9 +363,25 @@ EVE rounds up per run, then multiplies by run count — not the other way around
 `structure_bonus` (material reduction from EC rigs) is applied multiplicatively inside the
 same `ceil()`, not after. Both reductions must be inside the ceiling.
 
-Per-blueprint ME is looked up per node: `me = req.me_overrides.get(type_id, req.me_level)`.
-`me_overrides` is a `dict[int, int]` keyed by product `type_id`. If a type_id has no
-override, the global `me_level` (default 10) applies.
+**ME level rules per node** (applied in both `_build_node` and `_compute_flat_bom`):
+
+```python
+if activity_id == ACTIVITY_REACTION:
+    default_me = 0          # reactions cannot be researched
+elif depth == 0 (or type_id == root_type_id):
+    default_me = req.me_level   # root item uses user-specified ME
+else:
+    default_me = 10         # all sub-manufactured items default to ME 10
+me = req.me_overrides.get(type_id, default_me)
+```
+
+`me_overrides` is a `dict[int, int]` keyed by product `type_id` — editable per-item in
+the BPO Research Levels UI table. The frontend resets overrides when a different item is
+selected. Reactions and the root hull are read-only in the UI.
+
+`build_cost()` also returns `bpo_list: list[BPOInfo]` — one entry per manufactured/reacted
+node in the BOM (discovered by BFS), used to populate the BPO Research Levels table.
+`BPOInfo` carries `type_id`, `name`, `activity_id`, `me_level`, `is_root`.
 
 ### 8.5 Job Fees
 
@@ -623,8 +653,12 @@ Three files: `index.html`, `style.css`, `app.js`.
 - **Item search**: debounced autocomplete against `/api/v1/search`. Stores `type_id` in hidden field.
 - **System search**: debounced autocomplete against `/api/v1/search-systems`. Shows security
   status colour-coded (green ≥0.5, yellow 0.1–0.5, red <0.1).
-- **Calculate**: fires `/build-cost` and `/compare-material-source` in parallel (`Promise.all`).
-  Results appear together; if compare fails, build results still show.
+- **Calculate**: fires `/build-cost` first; renders build results immediately when it
+  returns (~2s). `/compare-material-source` is fired concurrently but awaited separately —
+  the compare section populates once it resolves. This prevents large items (Keepstar,
+  Avatar) from stalling the UI for 10–15s on a cold ESI cache. If compare fails, build
+  results remain intact. `setLoading(false)` is called as soon as build-cost returns, not
+  after compare.
 - **Cost breakdown table**: shows each component as ISK and % of total. When
   `leftover_net_isk > 0` AND `leftover_constraint_met`, switches to "Net total cost"
   headline and uses ore path costs (`co.total_isk + co.refining_fee`) as material cost

@@ -1,3 +1,4 @@
+from functools import lru_cache
 from app.data import sde
 
 ACTIVITY_MANUFACTURING = 1
@@ -21,6 +22,7 @@ _HYB_REACT_GROUPS  = frozenset({974})
 _BIO_REACT_GROUPS  = frozenset({712})
 
 
+@lru_cache(maxsize=8192)
 def get_slot(type_id: int, activity_id: int) -> str:
     """Return the Ravworks-style activity slot name for this item."""
     if activity_id == ACTIVITY_REACTION:

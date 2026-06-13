@@ -418,8 +418,7 @@ def build_cost(req: BuildCostRequest):
     flat_leaves = _compute_flat_bom(req.type_id, req.runs, req)
 
     # Pre-warm ESI cache for all leaves before any pricing calls
-    leaf_ids = _collect_leaf_type_ids(req.type_id, req)
-    _prefetch_leaf_prices(leaf_ids | set(flat_leaves.keys()), req)
+    _prefetch_leaf_prices(set(flat_leaves.keys()), req)
 
     # Price leaves from flat BOM → correct material + logistics costs
     flat_material_cost = Decimal("0")
