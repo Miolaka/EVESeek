@@ -696,6 +696,7 @@ const ACTIVITY_SLOTS = [
   { key: 'equipment',         label: 'Modules and Equipment' },
   { key: 'ammo',              label: 'Ammo and Charges' },
   { key: 'drones',            label: 'Drones and Fighters' },
+  { key: 'structure',         label: 'Structures & Citadels' },
   { key: 'fuel_blocks',       label: 'Fuel Blocks' },
   { key: 'comp_react',        label: 'Composite Reactions' },
   { key: 'hyb_react',         label: 'Hybrid Reactions' },

@@ -69,7 +69,7 @@ def get_slot(type_id: int, activity_id: int) -> str:
             return "cap_adv_comp" if t2 else "cap_comp"
         return "adv_comp" if t2 else "equipment"
 
-    if cat_id in {22, 65, 40}:
+    if cat_id in {65, 40}:
         return "structure"
 
     return "equipment"
